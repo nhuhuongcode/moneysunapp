@@ -1,0 +1,83 @@
+{
+  "project_info": {
+    "project_number": "794964578447",
+    "firebase_url": "https://sunmoney-5c1c1-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "sunmoney-5c1c1",
+    "storage_bucket": "sunmoney-5c1c1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:794964578447:android:698c72b8ce326c1946a0fa",
+        "android_client_info": {
+          "package_name": "com.example.moneysun"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "794964578447-t1vug437nupo1vbaddln9ddtjaivvhaj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB99kGiarg6k46Vn080SVQQ2QdvGHOrapM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "794964578447-t1vug437nupo1vbaddln9ddtjaivvhaj.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "794964578447-dtb1nrn4d4k9dql0pe7ap8ku5l6iaaq0.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.sunmoney"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:794964578447:android:7a014b755aa31ced46a0fa",
+        "android_client_info": {
+          "package_name": "com.example.sunmoney"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "794964578447-t1vug437nupo1vbaddln9ddtjaivvhaj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB99kGiarg6k46Vn080SVQQ2QdvGHOrapM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "794964578447-t1vug437nupo1vbaddln9ddtjaivvhaj.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "794964578447-dtb1nrn4d4k9dql0pe7ap8ku5l6iaaq0.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.sunmoney"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
