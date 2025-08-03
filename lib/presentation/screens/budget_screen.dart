@@ -1,11 +1,12 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:moneysun/data/models/budget_model.dart';
 import 'package:moneysun/data/models/category_model.dart';
+import 'package:moneysun/data/models/report_data_model.dart';
+import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/services/database_service.dart';
 import 'package:provider/provider.dart';
-import 'package:moneysun/data/providers/user_provider.dart';
 
 class BudgetScreen extends StatefulWidget {
   const BudgetScreen({super.key});
@@ -16,313 +17,94 @@ class BudgetScreen extends StatefulWidget {
 
 class _BudgetScreenState extends State<BudgetScreen> {
   final DatabaseService _databaseService = DatabaseService();
-  final _amountController = TextEditingController();
-  DateTime _selectedMonth = DateTime.now();
-
-  // Dialog để đặt/sửa ngân sách TỔNG
-  void _showSetTotalBudgetDialog(Budget? currentBudget) {
-    final userProvider = Provider.of<UserProvider>(context, listen: false);
-    _amountController.text = currentBudget?.totalAmount.toString() ?? '';
-    String ownerType = 'personal';
-    if (currentBudget != null &&
-        currentBudget.ownerId == userProvider.partnershipId) {
-      ownerType = 'shared';
-    }
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: Text(
-                'Đặt ngân sách cho tháng ${DateFormat('MM/yyyy').format(_selectedMonth)}',
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: _amountController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Tổng ngân sách',
-                      ),
-                    ),
-                    if (userProvider.partnershipId != null &&
-                        currentBudget == null) ...[
-                      const SizedBox(height: 16),
-                      RadioListTile<String>(
-                        title: const Text('Cá nhân'),
-                        value: 'personal',
-                        groupValue: ownerType,
-                        onChanged: (value) =>
-                            setDialogState(() => ownerType = value!),
-                      ),
-                      RadioListTile<String>(
-                        title: const Text('Chung'),
-                        value: 'shared',
-                        groupValue: ownerType,
-                        onChanged: (value) =>
-                            setDialogState(() => ownerType = value!),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
-                  child: const Text('Hủy'),
-                ),
-                ElevatedButton(
-                  onPressed: () => _handleSaveTotalBudget(
-                    dialogContext: dialogContext,
-                    userProvider: userProvider,
-                    currentBudget: currentBudget,
-                    ownerType: ownerType,
-                  ),
-                  child: const Text('Lưu'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  // Dialog để đặt hạn mức cho một DANH MỤC CỤ THỂ
-  void _showSetCategoryBudgetDialog(
-    String budgetId,
-    List<Category> allCategories,
-  ) {
-    Category? selectedCategory;
-    final categoryAmountController = TextEditingController();
-
-    // Sửa lỗi Dropdown
-    if (selectedCategory != null &&
-        !allCategories.any((cat) => cat.id == selectedCategory!.id)) {
-      selectedCategory = null;
-    }
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text('Đặt hạn mức cho Danh mục'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DropdownButtonFormField<Category>(
-                    hint: const Text('Chọn danh mục'),
-                    isExpanded: true,
-                    value: selectedCategory,
-                    items: allCategories.map((cat) {
-                      return DropdownMenuItem<Category>(
-                        value: cat,
-                        child: Text(cat.name),
-                      );
-                    }).toList(),
-                    onChanged: (cat) =>
-                        setDialogState(() => selectedCategory = cat),
-                    validator: (value) =>
-                        value == null ? 'Vui lòng chọn một danh mục' : null,
-                  ),
-                  TextField(
-                    controller: categoryAmountController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Hạn mức chi tiêu',
-                    ),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Hủy'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    final amount = double.tryParse(
-                      categoryAmountController.text,
-                    );
-                    if (amount != null && selectedCategory != null) {
-                      _databaseService.setCategoryBudget(
-                        budgetId,
-                        selectedCategory!.id,
-                        amount,
-                      );
-                      Navigator.pop(context);
-                    }
-                  },
-                  child: const Text('Lưu'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  // Logic xử lý lưu ngân sách TỔNG
-  void _handleSaveTotalBudget({
-    required BuildContext dialogContext,
-    required UserProvider userProvider,
-    required Budget? currentBudget,
-    required String ownerType,
-  }) {
-    final amount = double.tryParse(_amountController.text);
-    if (amount == null || amount < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Vui lòng nhập một số tiền hợp lệ.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    final String ownerId = (currentBudget != null)
-        ? currentBudget.ownerId
-        : (ownerType == 'shared'
-              ? userProvider.partnershipId!
-              : FirebaseAuth.instance.currentUser!.uid);
-
-    final newBudget = Budget(
-      id: currentBudget?.id ?? '',
-      ownerId: ownerId,
-      month: DateFormat('yyyy-MM').format(_selectedMonth),
-      totalAmount: amount,
-      categoryAmounts: currentBudget?.categoryAmounts ?? {},
-    );
-
-    _databaseService.saveBudget(newBudget);
-    Navigator.pop(dialogContext);
-  }
+  String _selectedMonth = DateFormat('yyyy-MM').format(DateTime.now());
 
   @override
   Widget build(BuildContext context) {
-    final monthString = DateFormat('yyyy-MM').format(_selectedMonth);
+    final userProvider = Provider.of<UserProvider>(context);
     final currencyFormatter = NumberFormat.currency(
       locale: 'vi_VN',
       symbol: '₫',
     );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Ngân sách tháng')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            // Bộ chọn tháng
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.chevron_left),
-                  onPressed: () => setState(
-                    () => _selectedMonth = DateTime(
-                      _selectedMonth.year,
-                      _selectedMonth.month - 1,
-                    ),
-                  ),
-                ),
-                Text(
-                  DateFormat('MMMM yyyy', 'vi_VN').format(_selectedMonth),
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.chevron_right),
-                  onPressed: () => setState(
-                    () => _selectedMonth = DateTime(
-                      _selectedMonth.year,
-                      _selectedMonth.month + 1,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
+      appBar: AppBar(
+        title: const Text('Ngân sách'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.calendar_month),
+            onPressed: _showMonthPicker,
+          ),
+        ],
+      ),
+      body: StreamBuilder<Budget?>(
+        stream: _databaseService.getBudgetForMonthStream(_selectedMonth),
+        builder: (context, budgetSnapshot) {
+          return FutureBuilder<ReportData>(
+            // FIX: Lấy dữ liệu thực tế để so sánh
+            future: _getActualSpendingData(userProvider),
+            builder: (context, actualSnapshot) {
+              if (!actualSnapshot.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
 
-            // Nội dung chính
-            StreamBuilder<Budget?>(
-              stream: _databaseService.getBudgetForMonthStream(monthString),
-              builder: (context, budgetSnapshot) {
-                if (budgetSnapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+              final actualData = actualSnapshot.data!;
+              final budget = budgetSnapshot.data;
 
-                final budget = budgetSnapshot.data;
-
-                // TRƯỜNG HỢP 1: CHƯA CÓ NGÂN SÁCH
-                if (budget == null) {
-                  return Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Center(
-                        child: ElevatedButton.icon(
-                          onPressed: () => _showSetTotalBudgetDialog(null),
-                          icon: const Icon(Icons.add),
-                          label: const Text('Tạo Ngân Sách Tổng'),
-                        ),
-                      ),
-                    ),
-                  );
-                }
-
-                // TRƯỜNG HỢP 2: ĐÃ CÓ NGÂN SÁCH (budget chắc chắn không null ở đây)
-                return Column(
+              return SingleChildScrollView(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Hiển thị ngân sách tổng
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          children: [
-                            Text(
-                              'Ngân sách đã đặt',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              currencyFormatter.format(budget.totalAmount),
-                              style: Theme.of(context).textTheme.displaySmall
-                                  ?.copyWith(
-                                    color: Theme.of(context).primaryColor,
-                                  ),
-                            ),
-                            const SizedBox(height: 16),
-                            ElevatedButton.icon(
-                              onPressed: () =>
-                                  _showSetTotalBudgetDialog(budget),
-                              icon: const Icon(Icons.edit),
-                              label: const Text('Chỉnh Sửa'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
+                    // Header với tháng được chọn
+                    _buildMonthHeader(),
+                    const SizedBox(height: 16),
 
-                    // Hiển thị ngân sách theo danh mục
-                    Text(
-                      'Hạn mức theo Danh mục',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 8),
-                    _buildCategoryBudgetsList(
+                    // FIX: Tổng quan ngân sách vs thực tế
+                    _buildBudgetOverviewCard(
                       budget,
+                      actualData,
                       currencyFormatter,
-                    ), // Gọi hàm build danh sách con
+                    ),
+                    const SizedBox(height: 16),
+
+                    // FIX: Danh sách categories với ngân sách vs thực tế
+                    _buildCategoryBudgetList(
+                      budget,
+                      actualData,
+                      currencyFormatter,
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Nút thêm/sửa ngân sách
+                    _buildActionButtons(budget),
                   ],
-                );
-              },
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildMonthHeader() {
+    final date = DateFormat('yyyy-MM').parse(_selectedMonth);
+    final displayMonth = DateFormat('MMMM yyyy', 'vi_VN').format(date);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Ngân sách tháng $displayMonth',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            IconButton(
+              icon: const Icon(Icons.edit_calendar),
+              onPressed: _showMonthPicker,
             ),
           ],
         ),
@@ -330,81 +112,495 @@ class _BudgetScreenState extends State<BudgetScreen> {
     );
   }
 
-  // Widget để xây dựng danh sách ngân sách theo danh mục
-  Widget _buildCategoryBudgetsList(Budget budget, NumberFormat formatter) {
-    return StreamBuilder<List<Category>>(
-      stream: _databaseService.getCategoriesStream(),
-      builder: (context, categorySnapshot) {
-        if (!categorySnapshot.hasData)
-          return const Center(child: CircularProgressIndicator());
+  // FIX: Tổng quan ngân sách
+  Widget _buildBudgetOverviewCard(
+    Budget? budget,
+    ReportData actualData,
+    NumberFormat formatter,
+  ) {
+    final totalBudget = budget?.totalAmount ?? 0.0;
+    final totalSpent = actualData.totalExpense;
+    final remaining = totalBudget - totalSpent;
+    final spentPercentage = totalBudget > 0
+        ? (totalSpent / totalBudget * 100)
+        : 0.0;
 
-        final allCategories = categorySnapshot.data!;
-        final categoryBudgets = budget.categoryAmounts;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            const Text(
+              'Tổng quan',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
 
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Column(
+            // Progress indicator
+            Stack(
               children: [
-                if (categoryBudgets.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16.0),
-                    child: Text('Chưa có hạn mức nào được đặt.'),
+                Container(
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(4),
                   ),
-
-                // Lặp qua các hạn mức đã đặt và hiển thị
-                ...categoryBudgets.entries.map((entry) {
-                  final categoryId = entry.key;
-                  final amount = (entry.value as num).toDouble();
-                  final category = allCategories.firstWhere(
-                    (c) => c.id == categoryId,
-                    orElse: () => Category(
-                      id: '',
-                      name: 'Danh mục đã xóa',
-                      ownerId: '',
-                      type: 'expense',
+                ),
+                FractionallySizedBox(
+                  widthFactor: spentPercentage / 100,
+                  child: Container(
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: _getProgressColor(spentPercentage),
+                      borderRadius: BorderRadius.circular(4),
                     ),
-                  );
-
-                  return ListTile(
-                    leading: const Icon(
-                      Icons.label_important_outline,
-                      color: Colors.grey,
-                    ),
-                    title: Text(category.name),
-                    trailing: Text(formatter.format(amount)),
-                    dense: true,
-                  );
-                }).toList(),
-
-                // Nút để thêm hạn mức mới
-                const Divider(),
-                TextButton.icon(
-                  icon: const Icon(Icons.add),
-                  label: const Text('Thêm hạn mức cho danh mục'),
-                  onPressed: () {
-                    final expenseCategories = allCategories
-                        .where((c) => c.type == 'expense')
-                        .toList();
-                    if (expenseCategories.isNotEmpty) {
-                      _showSetCategoryBudgetDialog(
-                        budget.id,
-                        expenseCategories,
-                      );
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Bạn cần tạo danh mục Chi tiêu trước!'),
-                        ),
-                      );
-                    }
-                  },
+                  ),
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+
+            Text(
+              '${spentPercentage.toStringAsFixed(1)}% đã sử dụng',
+              style: TextStyle(
+                color: _getProgressColor(spentPercentage),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Thống kê chi tiết
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildBudgetStat(
+                  'Ngân sách',
+                  totalBudget,
+                  Colors.blue,
+                  formatter,
+                ),
+                _buildBudgetStat('Đã chi', totalSpent, Colors.red, formatter),
+                _buildBudgetStat(
+                  'Còn lại',
+                  remaining,
+                  remaining >= 0 ? Colors.green : Colors.red,
+                  formatter,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBudgetStat(
+    String label,
+    double amount,
+    Color color,
+    NumberFormat formatter,
+  ) {
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+        const SizedBox(height: 4),
+        Text(
+          formatter.format(amount),
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // FIX: Danh sách categories với so sánh ngân sách vs thực tế
+  Widget _buildCategoryBudgetList(
+    Budget? budget,
+    ReportData actualData,
+    NumberFormat formatter,
+  ) {
+    return StreamBuilder<List<Category>>(
+      stream: _databaseService.getCategoriesByTypeStream('expense'),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final categories = snapshot.data!;
+        if (categories.isEmpty) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Text('Chưa có danh mục chi tiêu nào'),
+            ),
+          );
+        }
+
+        return Card(
+          child: Column(
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text(
+                  'Chi tiết theo danh mục',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+              ...categories.map((category) {
+                final budgetAmount =
+                    budget?.categoryAmounts[category.id] ?? 0.0;
+                final actualAmount =
+                    actualData.expenseByCategory[category] ?? 0.0;
+                final percentage = budgetAmount > 0
+                    ? (actualAmount / budgetAmount * 100)
+                    : 0.0;
+
+                return _buildCategoryBudgetItem(
+                  category,
+                  budgetAmount,
+                  actualAmount,
+                  percentage,
+                  formatter,
+                  budget?.id ?? '',
+                );
+              }).toList(),
+            ],
           ),
         );
       },
+    );
+  }
+
+  Widget _buildCategoryBudgetItem(
+    Category category,
+    double budgetAmount,
+    double actualAmount,
+    double percentage,
+    NumberFormat formatter,
+    String budgetId,
+  ) {
+    final progressColor = _getProgressColor(percentage);
+
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: progressColor.withOpacity(0.2),
+        child: Icon(Icons.category, color: progressColor),
+      ),
+      title: Text(category.name),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 4),
+          // Progress bar
+          Stack(
+            children: [
+              Container(
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              FractionallySizedBox(
+                widthFactor: (percentage / 100).clamp(0.0, 1.0),
+                child: Container(
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: progressColor,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${formatter.format(actualAmount)} / ${formatter.format(budgetAmount)}',
+            style: const TextStyle(fontSize: 12),
+          ),
+        ],
+      ),
+      trailing: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            '${percentage.toStringAsFixed(0)}%',
+            style: TextStyle(fontWeight: FontWeight.bold, color: progressColor),
+          ),
+          Text(
+            formatter.format(budgetAmount - actualAmount),
+            style: TextStyle(
+              fontSize: 10,
+              color: budgetAmount - actualAmount >= 0
+                  ? Colors.green
+                  : Colors.red,
+            ),
+          ),
+        ],
+      ),
+      onTap: () => _showSetBudgetDialog(category, budgetAmount, budgetId),
+    );
+  }
+
+  Widget _buildActionButtons(Budget? budget) {
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: () => _showSetTotalBudgetDialog(budget),
+            icon: const Icon(Icons.add),
+            label: Text(
+              budget == null ? 'Tạo ngân sách tháng' : 'Sửa tổng ngân sách',
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (budget != null)
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _deleteBudget(budget),
+              icon: const Icon(Icons.delete, color: Colors.red),
+              label: const Text(
+                'Xóa ngân sách',
+                style: TextStyle(color: Colors.red),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Color _getProgressColor(double percentage) {
+    if (percentage <= 50) return Colors.green;
+    if (percentage <= 80) return Colors.orange;
+    return Colors.red;
+  }
+
+  Future<ReportData> _getActualSpendingData(UserProvider userProvider) async {
+    final date = DateFormat('yyyy-MM').parse(_selectedMonth);
+    final startDate = DateTime(date.year, date.month, 1);
+    final endDate = DateTime(date.year, date.month + 1, 0);
+
+    return await _databaseService.getReportData(
+      userProvider,
+      startDate,
+      endDate,
+    );
+  }
+
+  void _showMonthPicker() async {
+    final date = DateFormat('yyyy-MM').parse(_selectedMonth);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: date,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDatePickerMode: DatePickerMode.year,
+    );
+
+    if (picked != null) {
+      setState(() {
+        _selectedMonth = DateFormat('yyyy-MM').format(picked);
+      });
+    }
+  }
+
+  void _showSetTotalBudgetDialog(Budget? existingBudget) {
+    final controller = TextEditingController(
+      text: existingBudget?.totalAmount.toString() ?? '',
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          existingBudget == null ? 'Tạo ngân sách' : 'Sửa tổng ngân sách',
+        ),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            labelText: 'Tổng ngân sách',
+            suffixText: '₫',
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: TextInputType.number,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final amount = double.tryParse(controller.text);
+              if (amount != null && amount > 0) {
+                final budget = Budget(
+                  id: existingBudget?.id ?? '',
+                  ownerId: Provider.of<UserProvider>(
+                    context,
+                    listen: false,
+                  ).currentUser!.uid,
+                  month: _selectedMonth,
+                  totalAmount: amount,
+                  categoryAmounts: existingBudget?.categoryAmounts ?? {},
+                );
+
+                await _databaseService.saveBudget(budget);
+                Navigator.pop(context);
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      existingBudget == null
+                          ? 'Đã tạo ngân sách'
+                          : 'Đã cập nhật ngân sách',
+                    ),
+                  ),
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Vui lòng nhập số tiền hợp lệ')),
+                );
+              }
+            },
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSetBudgetDialog(
+    Category category,
+    double currentAmount,
+    String budgetId,
+  ) {
+    final controller = TextEditingController(
+      text: currentAmount > 0 ? currentAmount.toString() : '',
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Ngân sách: ${category.name}'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            labelText: 'Ngân sách cho danh mục',
+            suffixText: '₫',
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: TextInputType.number,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          if (currentAmount > 0)
+            TextButton(
+              onPressed: () async {
+                // Xóa ngân sách cho category này
+                await _databaseService.setCategoryBudget(
+                  budgetId,
+                  category.id,
+                  0,
+                );
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Đã xóa ngân sách danh mục')),
+                );
+              },
+              child: const Text('Xóa', style: TextStyle(color: Colors.red)),
+            ),
+          ElevatedButton(
+            onPressed: () async {
+              final amount = double.tryParse(controller.text);
+              if (amount != null && amount >= 0) {
+                if (budgetId.isEmpty) {
+                  // Tạo budget mới nếu chưa có
+                  final budget = Budget(
+                    id: '',
+                    ownerId: Provider.of<UserProvider>(
+                      context,
+                      listen: false,
+                    ).currentUser!.uid,
+                    month: _selectedMonth,
+                    totalAmount: 0,
+                    categoryAmounts: {category.id: amount},
+                  );
+                  await _databaseService.saveBudget(budget);
+                } else {
+                  await _databaseService.setCategoryBudget(
+                    budgetId,
+                    category.id,
+                    amount,
+                  );
+                }
+
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Đã cập nhật ngân sách danh mục'),
+                  ),
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Vui lòng nhập số tiền hợp lệ')),
+                );
+              }
+            },
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _deleteBudget(Budget budget) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Xóa ngân sách'),
+        content: const Text(
+          'Bạn có chắc chắn muốn xóa toàn bộ ngân sách tháng này không?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              try {
+                await FirebaseDatabase.instance
+                    .ref()
+                    .child('budgets')
+                    .child(budget.id)
+                    .remove();
+
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Đã xóa ngân sách')),
+                );
+              } catch (e) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Lỗi khi xóa: $e')));
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Xóa', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
     );
   }
 }

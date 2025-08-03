@@ -7,11 +7,7 @@ import 'package:moneysun/presentation/screens/add_transaction_screen.dart';
 class TransactionListItemDetailed extends StatelessWidget {
   final TransactionModel transaction;
 
-  const TransactionListItemDetailed({
-    super.key,
-    required this.transaction,
-    // required this.categoryIcon,
-  });
+  const TransactionListItemDetailed({super.key, required this.transaction});
 
   @override
   Widget build(BuildContext context) {
@@ -19,20 +15,27 @@ class TransactionListItemDetailed extends StatelessWidget {
       locale: 'vi_VN',
       symbol: '₫',
     );
+
+    // FIX: Xác định màu sắc và icon theo type
     Color amountColor;
     String sign;
+    IconData categoryIcon;
+
     switch (transaction.type) {
       case TransactionType.income:
         amountColor = Colors.green.shade700;
         sign = '+';
+        categoryIcon = Icons.trending_up; // Icon thu nhập
         break;
       case TransactionType.expense:
         amountColor = Colors.red.shade700;
         sign = '-';
+        categoryIcon = Icons.trending_down; // Icon chi tiêu
         break;
       case TransactionType.transfer:
-        amountColor = Colors.yellow.shade700;
+        amountColor = Colors.orange.shade700; // FIX: Màu vàng/cam cho transfer
         sign = '';
+        categoryIcon = Icons.swap_horiz; // Icon chuyển tiền
         break;
     }
 
@@ -40,42 +43,121 @@ class TransactionListItemDetailed extends StatelessWidget {
       onTap: () {
         _showTransactionDetailDialog(context, transaction);
       },
+      // FIX: Thay đổi icon từ mũi tên thành category icon
       leading: CircleAvatar(
         backgroundColor: amountColor.withOpacity(0.1),
-        child: Icon(Icons.label_outline, color: amountColor),
+        child: Icon(categoryIcon, color: amountColor),
       ),
-      title: Text(
-        transaction.categoryName, // Dòng đầu tiên là tên Category
-        style: const TextStyle(fontWeight: FontWeight.bold),
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Dòng 2 là Description (nếu có)
-          if (transaction.description.isNotEmpty)
-            Text(
-              transaction.description,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          // Dòng 3 là SubCategory và Wallet
-          Text(
-            '${transaction.subCategoryName.isNotEmpty ? "${transaction.subCategoryName} • " : ""}${transaction.walletName}',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-          ),
-        ],
-      ),
+      // FIX: Title hiển thị category name hoặc transfer format
+      title: _buildTransactionTitle(),
+      // FIX: Subtitle hiển thị subcategory, description, wallet
+      subtitle: _buildTransactionSubtitle(),
       trailing: Text(
-        '${sign} ${currencyFormatter.format(transaction.amount)}',
+        '${sign}${currencyFormatter.format(transaction.amount)}',
         style: TextStyle(
           color: amountColor,
           fontWeight: FontWeight.bold,
           fontSize: 15,
         ),
       ),
-      isThreeLine:
-          transaction.description.isNotEmpty, // Cho phép subtitle có 2 dòng
+      // Cho phép subtitle có nhiều dòng nếu cần
+      isThreeLine: _needsThreeLines(),
     );
+  }
+
+  // FIX: Build title theo format yêu cầu
+  Widget _buildTransactionTitle() {
+    if (transaction.type == TransactionType.transfer) {
+      // FIX: Hiển thị "Chuyển tiền" và từ -> đến
+      if (transaction.transferFromWalletName!.isNotEmpty &&
+          transaction.transferToWalletName!.isNotEmpty) {
+        return Text(
+          'Chuyển ${transaction.transferFromWalletName} → ${transaction.transferToWalletName}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        );
+      }
+      return const Text(
+        'Chuyển tiền',
+        style: TextStyle(fontWeight: FontWeight.bold),
+      );
+    } else {
+      // Hiển thị category name
+      return Text(
+        transaction.categoryName.isNotEmpty
+            ? transaction.categoryName
+            : (transaction.type == TransactionType.income
+                  ? 'Thu nhập'
+                  : 'Chi tiêu'),
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      );
+    }
+  }
+
+  // FIX: Build subtitle với format mới
+  Widget _buildTransactionSubtitle() {
+    List<String> subtitleParts = [];
+
+    // Thêm subcategory nếu có
+    if (transaction.subCategoryName.isNotEmpty) {
+      subtitleParts.add(transaction.subCategoryName);
+    }
+
+    // Thêm description nếu có
+    if (transaction.description.isNotEmpty) {
+      subtitleParts.add(transaction.description);
+    }
+
+    // Thêm wallet name
+    if (transaction.walletName.isNotEmpty) {
+      subtitleParts.add(transaction.walletName);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Dòng đầu: SubCategory (nếu có)
+        if (transaction.subCategoryName.isNotEmpty)
+          Text(
+            transaction.subCategoryName,
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.grey.shade700,
+              fontWeight: FontWeight.w500,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+
+        // Dòng thứ hai: Description (nếu có)
+        if (transaction.description.isNotEmpty)
+          Text(
+            transaction.description,
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+
+        // Dòng cuối: Wallet name
+        Text(
+          transaction.walletName.isNotEmpty
+              ? transaction.walletName
+              : 'Ví đã xóa',
+          style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+        ),
+      ],
+    );
+  }
+
+  // Xác định có cần 3 dòng không
+  bool _needsThreeLines() {
+    int lineCount = 1; // Luôn có ít nhất wallet name
+
+    if (transaction.subCategoryName.isNotEmpty) lineCount++;
+    if (transaction.description.isNotEmpty) lineCount++;
+
+    return lineCount > 2;
   }
 
   void _showTransactionDetailDialog(
@@ -89,7 +171,8 @@ class TransactionListItemDetailed extends StatelessWidget {
 
     showModalBottomSheet(
       context: context,
-      builder: (ctx) => Padding(
+      isScrollControlled: true,
+      builder: (ctx) => Container(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -97,60 +180,41 @@ class TransactionListItemDetailed extends StatelessWidget {
           children: [
             // Tiêu đề
             Text(
-              transaction.description.isNotEmpty
-                  ? transaction.description
-                  : transaction.categoryName,
+              _getDialogTitle(),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 8),
-            // Số tiền
+
+            // Số tiền với màu phù hợp
             Text(
               currencyFormatter.format(transaction.amount),
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: transaction.type == TransactionType.expense
-                    ? Colors.red
-                    : Colors.green,
+                color: _getAmountColor(),
                 fontWeight: FontWeight.bold,
               ),
             ),
             const Divider(height: 24),
-            // Chi tiết
-            _buildDetailRow(
-              Icons.calendar_today,
-              'Ngày',
-              DateFormat('dd/MM/yyyy, HH:mm').format(transaction.date),
-            ),
-            _buildDetailRow(
-              Icons.account_balance_wallet,
-              'Nguồn tiền',
-              transaction.walletName,
-            ),
-            _buildDetailRow(
-              Icons.category,
-              'Danh mục',
-              transaction.categoryName,
-            ),
+
+            // Chi tiết giao dịch
+            ..._buildDetailRows(),
+
             const SizedBox(height: 24),
+
             // Các nút hành động
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 TextButton(
                   onPressed: () {
-                    _showConfirmDeleteDialog(
-                      context,
-                      transaction,
-                    ); // Mở dialog xác nhận
                     Navigator.pop(ctx);
+                    _showConfirmDeleteDialog(context, transaction);
                   },
                   child: const Text('XÓA', style: TextStyle(color: Colors.red)),
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton(
                   onPressed: () {
-                    // Đóng bottom sheet
                     Navigator.pop(ctx);
-                    // Điều hướng đến màn hình sửa
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -168,6 +232,105 @@ class TransactionListItemDetailed extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _getDialogTitle() {
+    if (transaction.type == TransactionType.transfer) {
+      return 'Chi tiết chuyển tiền';
+    } else if (transaction.description.isNotEmpty) {
+      return transaction.description;
+    } else {
+      return transaction.categoryName.isNotEmpty
+          ? transaction.categoryName
+          : 'Chi tiết giao dịch';
+    }
+  }
+
+  Color _getAmountColor() {
+    switch (transaction.type) {
+      case TransactionType.income:
+        return Colors.green;
+      case TransactionType.expense:
+        return Colors.red;
+      case TransactionType.transfer:
+        return Colors.orange;
+    }
+  }
+
+  List<Widget> _buildDetailRows() {
+    List<Widget> rows = [];
+
+    // Ngày
+    rows.add(
+      _buildDetailRow(
+        Icons.calendar_today,
+        'Ngày',
+        DateFormat('dd/MM/yyyy, HH:mm').format(transaction.date),
+      ),
+    );
+
+    // Nguồn tiền
+    rows.add(
+      _buildDetailRow(
+        Icons.account_balance_wallet,
+        'Nguồn tiền',
+        transaction.walletName,
+      ),
+    );
+
+    // Category (nếu không phải transfer)
+    if (transaction.type != TransactionType.transfer &&
+        transaction.categoryName.isNotEmpty) {
+      rows.add(
+        _buildDetailRow(
+          Icons.category,
+          transaction.type == TransactionType.income ? 'Nguồn thu' : 'Danh mục',
+          transaction.categoryName,
+        ),
+      );
+    }
+
+    // Sub-category (nếu có)
+    if (transaction.subCategoryName.isNotEmpty) {
+      rows.add(
+        _buildDetailRow(
+          Icons.subdirectory_arrow_right,
+          'Danh mục con',
+          transaction.subCategoryName,
+        ),
+      );
+    }
+
+    // Transfer details (nếu là transfer)
+    if (transaction.type == TransactionType.transfer) {
+      if (transaction.transferFromWalletName!.isNotEmpty) {
+        rows.add(
+          _buildDetailRow(
+            Icons.call_made,
+            'Từ ví',
+            transaction.transferFromWalletName!,
+          ),
+        );
+      }
+      if (transaction.transferToWalletName!.isNotEmpty) {
+        rows.add(
+          _buildDetailRow(
+            Icons.call_received,
+            'Đến ví',
+            transaction.transferToWalletName!,
+          ),
+        );
+      }
+    }
+
+    // Mô tả (nếu có)
+    if (transaction.description.isNotEmpty) {
+      rows.add(
+        _buildDetailRow(Icons.description, 'Mô tả', transaction.description),
+      );
+    }
+
+    return rows;
   }
 
   Widget _buildDetailRow(IconData icon, String label, String value) {
@@ -203,12 +366,22 @@ class TransactionListItemDetailed extends StatelessWidget {
             child: const Text('Hủy'),
           ),
           ElevatedButton(
-            onPressed: () {
-              databaseService.deleteTransaction(transaction);
-              Navigator.pop(ctx);
+            onPressed: () async {
+              try {
+                await databaseService.deleteTransaction(transaction);
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Đã xóa giao dịch')),
+                );
+              } catch (e) {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Lỗi khi xóa: $e')));
+              }
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Xóa'),
+            child: const Text('Xóa', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),

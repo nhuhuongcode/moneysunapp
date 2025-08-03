@@ -4,8 +4,8 @@ import 'package:intl/intl.dart';
 import 'package:moneysun/data/models/budget_model.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
-import 'package:moneysun/data/models/report_data_model.dart'; // Import model mới
-import 'package:moneysun/data/models/category_model.dart'; // Import Category
+import 'package:moneysun/data/models/report_data_model.dart';
+import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:async/async.dart';
 import 'package:collection/collection.dart';
@@ -14,88 +14,34 @@ class DatabaseService {
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
   final String? _uid = FirebaseAuth.instance.currentUser?.uid;
 
-  Stream<List<TransactionModel>> getRecentTransactionsStream(
-    UserProvider userProvider, {
-    int limit = 15,
-  }) {
+  // FIX: Wallet selection cho AddTransaction - chỉ cho phép chọn ví của mình và ví chung
+  Stream<List<Wallet>> getSelectableWalletsStream(UserProvider userProvider) {
     if (_uid == null) return Stream.value([]);
 
-    // 1. Lấy stream của các ví và các danh mục
-    final walletsStream = getWalletsStream(userProvider);
-    final categoriesStream = getCategoriesStream();
-
-    // 2. Lấy stream của các giao dịch gần đây
-    final transRef = _dbRef
-        .child('transactions')
-        .orderByChild('userId')
-        .equalTo(_uid)
-        .limitToLast(limit);
-    final recentTransStream = transRef.onValue.map((event) {
-      final List<TransactionModel> transactions = [];
+    return _dbRef.child('wallets').onValue.map((event) {
+      final List<Wallet> selectableWallets = [];
       if (event.snapshot.exists) {
-        final map = event.snapshot.value as Map<dynamic, dynamic>;
-        map.forEach((key, value) {
-          final snapshot = event.snapshot.child(key);
-          transactions.add(TransactionModel.fromSnapshot(snapshot));
+        final allWalletsMap = event.snapshot.value as Map<dynamic, dynamic>;
+        allWalletsMap.forEach((key, value) {
+          final walletSnapshot = event.snapshot.child(key);
+          final wallet = Wallet.fromSnapshot(walletSnapshot);
+
+          // CHỈ cho phép chọn:
+          // 1. Ví của chính mình
+          // 2. Ví chung (partnership wallet)
+          if (wallet.ownerId == _uid ||
+              wallet.ownerId == userProvider.partnershipId) {
+            selectableWallets.add(wallet);
+          }
         });
       }
-      transactions.sort((a, b) => b.date.compareTo(a.date));
-      return transactions;
-    });
-
-    // 3. Sử dụng StreamZip để kết hợp 3 stream lại với nhau
-    // Nó sẽ chỉ phát ra một giá trị mới khi TẤT CẢ các stream con đều có dữ liệu.
-    return StreamZip([walletsStream, categoriesStream, recentTransStream]).map((
-      results,
-    ) {
-      final List<Wallet> wallets = results[0] as List<Wallet>;
-      final List<Category> categories = results[1] as List<Category>;
-      final List<TransactionModel> transactions =
-          results[2] as List<TransactionModel>;
-
-      // 4. "Làm giàu" dữ liệu giao dịch
-      return transactions.map((trans) {
-        final walletName = wallets
-            .firstWhere(
-              (w) => w.id == trans.walletId,
-              orElse: () =>
-                  Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: ''),
-            )
-            .name;
-        String categoryName = 'Không có';
-        String subCategoryName = '';
-
-        if (trans.categoryId != null) {
-          final category = categories.firstWhere(
-            (c) => c.id == trans.categoryId,
-            orElse: () => const Category(
-              id: '',
-              name: 'Danh mục đã xóa',
-              ownerId: '',
-              type: 'expense',
-            ),
-          );
-          categoryName = category.name;
-
-          if (trans.subCategoryId != null &&
-              category.subCategories.containsKey(trans.subCategoryId)) {
-            subCategoryName = category.subCategories[trans.subCategoryId]!;
-          }
-        }
-
-        return trans.copyWith(
-          walletName: walletName,
-          categoryName: categoryName,
-          subCategoryName: subCategoryName,
-        );
-      }).toList();
+      return selectableWallets;
     });
   }
 
-  // Lấy danh sách các ví của user dưới dạng một Stream (tự động cập nhật)
+  // Lấy danh sách các ví có thể XEM (bao gồm cả ví partner visible)
   Stream<List<Wallet>> getWalletsStream(UserProvider userProvider) {
-    if (_uid == null)
-      return Stream.value([]); // Trả về list rỗng nếu chưa đăng nhập
+    if (_uid == null) return Stream.value([]);
 
     if (userProvider.partnershipId == null || userProvider.partnerUid == null) {
       final walletRef = _dbRef
@@ -119,7 +65,6 @@ class DatabaseService {
     final pId = userProvider.partnershipId!;
     final partnerUid = userProvider.partnerUid!;
 
-    // Query một lần để lấy tất cả các ví có khả năng hiển thị
     return _dbRef.child('wallets').onValue.map((event) {
       final List<Wallet> visibleWallets = [];
       if (event.snapshot.exists) {
@@ -129,16 +74,12 @@ class DatabaseService {
           final wallet = Wallet.fromSnapshot(walletSnapshot);
 
           // Áp dụng các quy tắc hiển thị:
-          // 1. Ví của chính mình: Luôn hiển thị
           if (wallet.ownerId == _uid) {
             visibleWallets.add(wallet);
-          }
-          // 2. Ví chung: Luôn hiển thị
-          else if (wallet.ownerId == pId) {
+          } else if (wallet.ownerId == pId) {
             visibleWallets.add(wallet);
-          }
-          // 3. Ví của partner: Chỉ hiển thị nếu isVisibleToPartner = true
-          else if (wallet.ownerId == partnerUid && wallet.isVisibleToPartner) {
+          } else if (wallet.ownerId == partnerUid &&
+              wallet.isVisibleToPartner) {
             visibleWallets.add(wallet);
           }
         });
@@ -147,42 +88,213 @@ class DatabaseService {
     });
   }
 
-  // Thêm một ví mới
-  Future<void> addWallet(
-    String name,
-    double initialBalance,
-    String ownerId,
+  // FIX: addTransaction - Sửa logic cho income transaction
+  Future<void> addTransaction(TransactionModel transaction) async {
+    if (_uid == null) return;
+
+    // 1. Lưu giao dịch vào database
+    final newTransactionRef = _dbRef.child('transactions').push();
+    await newTransactionRef.set(transaction.toJson());
+
+    // 2. FIX: Cập nhật số dư của ví tương ứng
+    final walletRef = _dbRef.child('wallets').child(transaction.walletId);
+    final walletSnapshot = await walletRef.get();
+
+    if (walletSnapshot.exists) {
+      double balanceChange = 0;
+
+      switch (transaction.type) {
+        case TransactionType.income:
+          balanceChange = transaction.amount; // CỘNG cho thu nhập
+          break;
+        case TransactionType.expense:
+          balanceChange = -transaction.amount; // TRỪ cho chi tiêu
+          break;
+        case TransactionType.transfer:
+          balanceChange = -transaction.amount; // TRỪ cho transfer (từ ví nguồn)
+          break;
+      }
+
+      await walletRef
+          .child('balance')
+          .set(ServerValue.increment(balanceChange));
+    }
+
+    // 3. Lưu mô tả vào lịch sử
+    if (transaction.description.isNotEmpty) {
+      await saveDescriptionToHistory(transaction.description);
+    }
+  }
+
+  // FIX: updateTransaction - Sửa logic balance update
+  Future<void> updateTransaction(
+    TransactionModel newTransaction,
+    TransactionModel oldTransaction,
   ) async {
     if (_uid == null) return;
+
+    // 1. Cập nhật bản ghi giao dịch
+    await _dbRef
+        .child('transactions')
+        .child(newTransaction.id)
+        .set(newTransaction.toJson());
+
+    // 2. FIX: Xử lý cập nhật số dư ví
+    final newWalletRef = _dbRef.child('wallets').child(newTransaction.walletId);
+    final oldWalletRef = _dbRef.child('wallets').child(oldTransaction.walletId);
+
+    // Helper function để tính giá trị thay đổi balance
+    double getBalanceChange(TransactionModel trans) {
+      switch (trans.type) {
+        case TransactionType.income:
+          return trans.amount;
+        case TransactionType.expense:
+          return -trans.amount;
+        case TransactionType.transfer:
+          return -trans.amount;
+      }
+    }
+
+    if (newTransaction.walletId == oldTransaction.walletId) {
+      // Cùng ví: Tính chênh lệch
+      final oldChange = getBalanceChange(oldTransaction);
+      final newChange = getBalanceChange(newTransaction);
+      final difference = newChange - oldChange;
+
+      await newWalletRef
+          .child('balance')
+          .set(ServerValue.increment(difference));
+    } else {
+      // Khác ví: Hoàn tác cũ và áp dụng mới
+      final oldReversal = -getBalanceChange(oldTransaction);
+      final newChange = getBalanceChange(newTransaction);
+
+      await oldWalletRef
+          .child('balance')
+          .set(ServerValue.increment(oldReversal));
+      await newWalletRef.child('balance').set(ServerValue.increment(newChange));
+    }
+
+    // 3. Lưu mô tả mới
+    if (newTransaction.description.isNotEmpty) {
+      await saveDescriptionToHistory(newTransaction.description);
+    }
+  }
+
+  // FIX: deleteTransaction - Sửa logic hoàn tác balance
+  Future<void> deleteTransaction(TransactionModel transaction) async {
+    if (_uid == null) return;
+
     try {
-      final newWalletRef = _dbRef.child('wallets').push();
-      final newWallet = Wallet(
-        id: newWalletRef.key!,
-        name: name,
-        balance: initialBalance,
-        ownerId: ownerId, // <-- Sử dụng ownerId được truyền vào
-        isVisibleToPartner: true, // Mặc định ví mới luôn hiển thị
-      );
-      await newWalletRef.set(newWallet.toJson());
+      // 1. Xóa bản ghi giao dịch
+      await _dbRef.child('transactions').child(transaction.id).remove();
+
+      // 2. FIX: Hoàn tác ảnh hưởng lên số dư ví
+      final walletRef = _dbRef.child('wallets').child(transaction.walletId);
+
+      double reversalAmount = 0;
+      switch (transaction.type) {
+        case TransactionType.income:
+          reversalAmount = -transaction.amount; // Trừ lại số đã cộng
+          break;
+        case TransactionType.expense:
+          reversalAmount = transaction.amount; // Cộng lại số đã trừ
+          break;
+        case TransactionType.transfer:
+          reversalAmount = transaction.amount; // Cộng lại số đã trừ
+          break;
+      }
+
+      await walletRef
+          .child('balance')
+          .set(ServerValue.increment(reversalAmount));
     } catch (e) {
-      print("Lỗi khi thêm ví: $e");
+      print("Lỗi khi xóa giao dịch: $e");
       rethrow;
     }
   }
 
-  Future<void> addCategory(String name, String type) async {
-    // Thêm type
+  // FIX: addTransferTransaction - Đảm bảo logic chuyển tiền đúng
+  Future<void> addTransferTransaction({
+    required String fromWalletId,
+    required String toWalletId,
+    required double amount,
+    String? description,
+    required String fromWalletName,
+    required String toWalletName,
+  }) async {
     if (_uid == null) return;
-    final newCategoryRef = _dbRef.child('categories').child(_uid!).push();
-    final newCategory = Category(
-      id: newCategoryRef.key!,
-      name: name,
-      ownerId: _uid!,
-      type: type, // Gán type
+    final userId = _uid!;
+    final date = DateTime.now();
+
+    final finalDescription = description != null && description.isNotEmpty
+        ? description
+        : 'Chuyển tiền';
+
+    // Tạo giao dịch TRANSFER cho ví nguồn
+    final fromTrans = TransactionModel(
+      id: '',
+      amount: amount,
+      type: TransactionType.transfer,
+      walletId: fromWalletId,
+      date: date,
+      description: 'Chuyển đến: $toWalletName',
+      userId: userId,
+      transferToWalletId: toWalletId,
     );
-    await newCategoryRef.set(newCategory.toJson());
+
+    // Tạo giao dịch TRANSFER cho ví đích (với amount dương)
+    final toTrans = TransactionModel(
+      id: '',
+      amount: amount,
+      type: TransactionType.transfer,
+      walletId: toWalletId,
+      date: date,
+      description: 'Nhận từ: $fromWalletName',
+      userId: userId,
+      transferToWalletId: fromWalletId, // Ngược lại để trace
+    );
+
+    // Lưu cả hai giao dịch
+    final transRef = _dbRef.child('transactions');
+    await transRef.push().set(fromTrans.toJson());
+    await transRef.push().set(toTrans.toJson());
+
+    // Cập nhật số dư: Trừ từ ví nguồn, cộng vào ví đích
+    final fromWalletRef = _dbRef.child('wallets').child(fromWalletId);
+    final toWalletRef = _dbRef.child('wallets').child(toWalletId);
+
+    await fromWalletRef.child('balance').set(ServerValue.increment(-amount));
+    await toWalletRef.child('balance').set(ServerValue.increment(amount));
+
+    // Lưu mô tả
+    if (finalDescription.isNotEmpty) {
+      await saveDescriptionToHistory(finalDescription);
+    }
   }
 
+  // THÊM: Lấy categories theo type (income/expense)
+  Stream<List<Category>> getCategoriesByTypeStream(String type) {
+    if (_uid == null) return Stream.value([]);
+
+    final categoryRef = _dbRef.child('categories').child(_uid!);
+    return categoryRef.onValue.map((event) {
+      final List<Category> categories = [];
+      if (event.snapshot.exists) {
+        final map = event.snapshot.value as Map<dynamic, dynamic>;
+        map.forEach((key, value) {
+          final snapshot = event.snapshot.child(key);
+          final category = Category.fromSnapshot(snapshot);
+          if (category.type == type) {
+            categories.add(category);
+          }
+        });
+      }
+      return categories;
+    });
+  }
+
+  // Giữ nguyên method getCategoriesStream() cho backward compatibility
   Stream<List<Category>> getCategoriesStream() {
     if (_uid == null) return Stream.value([]);
     final categoryRef = _dbRef.child('categories').child(_uid!);
@@ -199,119 +311,134 @@ class DatabaseService {
     });
   }
 
-  Future<void> addTransaction(TransactionModel transaction) async {
-    if (_uid == null) return;
-
-    // 1. Lưu giao dịch vào database
-    final newTransactionRef = _dbRef.child('transactions').push();
-    await newTransactionRef.set(transaction.toJson());
-
-    // 2. Cập nhật số dư của ví tương ứng
-    final walletRef = _dbRef.child('wallets').child(transaction.walletId);
-    final walletSnapshot = await walletRef.get();
-
-    if (walletSnapshot.exists) {
-      final currentBalance = (walletSnapshot.child('balance').value as num)
-          .toDouble();
-      double newBalance;
-      if (transaction.type == 'income') {
-        newBalance = currentBalance + transaction.amount; // ✅ Đúng
-      } else if (transaction.type == 'expense') {
-        newBalance = currentBalance - transaction.amount; // ✅ Đúng
-      } else {
-        // Xử lý riêng cho transfer
-        newBalance = currentBalance - transaction.amount;
-      }
-      await walletRef.update({'balance': newBalance});
-    }
-
-    if (transaction.description.isNotEmpty) {
-      await saveDescriptionToHistory(transaction.description);
-    }
-  }
-
-  Future<void> updateTransaction(
-    TransactionModel newTransaction,
-    TransactionModel oldTransaction,
+  // Thêm một ví mới
+  Future<void> addWallet(
+    String name,
+    double initialBalance,
+    String ownerId,
   ) async {
     if (_uid == null) return;
-
-    // 1. Cập nhật bản ghi giao dịch
-    await _dbRef
-        .child('transactions')
-        .child(newTransaction.id)
-        .set(newTransaction.toJson());
-
-    // 2. Xử lý cập nhật số dư ví
-    final newWalletRef = _dbRef.child('wallets').child(newTransaction.walletId);
-    final oldWalletRef = _dbRef.child('wallets').child(oldTransaction.walletId);
-
-    // Nếu ví không thay đổi
-    if (newTransaction.walletId == oldTransaction.walletId) {
-      // Tính toán chênh lệch
-      double oldAmountValue = oldTransaction.type == TransactionType.income
-          ? oldTransaction.amount
-          : -oldTransaction.amount;
-      double newAmountValue = newTransaction.type == TransactionType.income
-          ? newTransaction.amount
-          : -newTransaction.amount;
-      double difference = newAmountValue - oldAmountValue;
-      await newWalletRef
-          .child('balance')
-          .set(ServerValue.increment(difference));
-    }
-    // Nếu ví thay đổi
-    else {
-      // Hoàn tác giao dịch cũ: Cộng lại số tiền đã chi, trừ đi số tiền đã thu
-      double oldAmountReversal = oldTransaction.type == TransactionType.income
-          ? -oldTransaction.amount
-          : oldTransaction.amount;
-      await oldWalletRef
-          .child('balance')
-          .set(ServerValue.increment(oldAmountReversal));
-
-      // Áp dụng giao dịch mới
-      double newAmountValue = newTransaction.type == TransactionType.income
-          ? newTransaction.amount
-          : -newTransaction.amount;
-      await newWalletRef
-          .child('balance')
-          .set(ServerValue.increment(newAmountValue));
-    }
-
-    // 3. (Tùy chọn) Lưu mô tả mới vào lịch sử
-    if (newTransaction.description.isNotEmpty) {
-      await saveDescriptionToHistory(newTransaction.description);
-    }
-  }
-
-  Future<void> deleteTransaction(TransactionModel transaction) async {
-    if (_uid == null) return;
-
     try {
-      // 1. Xóa bản ghi giao dịch
-      await _dbRef.child('transactions').child(transaction.id).remove();
-
-      // 2. Hoàn tác ảnh hưởng lên số dư ví
-      final walletRef = _dbRef.child('wallets').child(transaction.walletId);
-      // Tính toán giá trị hoàn tác: nếu là thu nhập thì trừ đi, nếu là chi tiêu thì cộng lại
-      final reversalAmount = transaction.type == TransactionType.income
-          ? -transaction.amount
-          : transaction.amount;
-
-      await walletRef
-          .child('balance')
-          .set(ServerValue.increment(reversalAmount));
-
-      // Logic cho giao dịch chuyển tiền (phức tạp hơn, cần xóa cả 2 giao dịch)
-      // Tạm thời bỏ qua để giữ cho chức năng cơ bản hoạt động.
+      final newWalletRef = _dbRef.child('wallets').push();
+      final newWallet = Wallet(
+        id: newWalletRef.key!,
+        name: name,
+        balance: initialBalance,
+        ownerId: ownerId,
+        isVisibleToPartner: true,
+      );
+      await newWalletRef.set(newWallet.toJson());
     } catch (e) {
-      print("Lỗi khi xóa giao dịch: $e");
+      print("Lỗi khi thêm ví: $e");
       rethrow;
     }
   }
 
-  // (Bên trong class DatabaseService)
+  Future<void> addCategory(String name, String type) async {
+    if (_uid == null) return;
+    final newCategoryRef = _dbRef.child('categories').child(_uid!).push();
+    final newCategory = Category(
+      id: newCategoryRef.key!,
+      name: name,
+      ownerId: _uid!,
+      type: type,
+    );
+    await newCategoryRef.set(newCategory.toJson());
+  }
+
+  // Các method khác giữ nguyên từ code cũ...
+  Stream<List<TransactionModel>> getRecentTransactionsStream(
+    UserProvider userProvider, {
+    int limit = 15,
+  }) {
+    if (_uid == null) return Stream.value([]);
+
+    final walletsStream = getWalletsStream(userProvider);
+    final categoriesStream = getCategoriesStream();
+
+    final transRef = _dbRef
+        .child('transactions')
+        .orderByChild('userId')
+        .equalTo(_uid)
+        .limitToLast(limit);
+    final recentTransStream = transRef.onValue.map((event) {
+      final List<TransactionModel> transactions = [];
+      if (event.snapshot.exists) {
+        final map = event.snapshot.value as Map<dynamic, dynamic>;
+        map.forEach((key, value) {
+          final snapshot = event.snapshot.child(key);
+          transactions.add(TransactionModel.fromSnapshot(snapshot));
+        });
+      }
+      transactions.sort((a, b) => b.date.compareTo(a.date));
+      return transactions;
+    });
+
+    return StreamZip([walletsStream, categoriesStream, recentTransStream]).map((
+      results,
+    ) {
+      final List<Wallet> wallets = results[0] as List<Wallet>;
+      final List<Category> categories = results[1] as List<Category>;
+      final List<TransactionModel> transactions =
+          results[2] as List<TransactionModel>;
+
+      return transactions.map((trans) {
+        final wallet = wallets.firstWhere(
+          (w) => w.id == trans.walletId,
+          orElse: () =>
+              Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: ''),
+        );
+
+        String categoryName = 'Không có';
+        String subCategoryName = '';
+
+        if (trans.categoryId != null) {
+          final category = categories.firstWhere(
+            (c) => c.id == trans.categoryId,
+            orElse: () => const Category(
+              id: '',
+              name: 'Danh mục đã xóa',
+              ownerId: '',
+              type: 'expense',
+            ),
+          );
+          categoryName = category.name;
+
+          if (trans.subCategoryId != null &&
+              category.subCategories.containsKey(trans.subCategoryId)) {
+            subCategoryName = category.subCategories[trans.subCategoryId]!;
+          }
+        }
+
+        String transferFromWalletName = '';
+        String transferToWalletName = '';
+
+        if (trans.type == TransactionType.transfer &&
+            trans.transferToWalletId != null) {
+          final targetWallet = wallets.firstWhere(
+            (w) => w.id == trans.transferToWalletId,
+            orElse: () =>
+                Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: ''),
+          );
+          if (trans.description.contains('Chuyển đến:')) {
+            transferFromWalletName = wallet.name;
+            transferToWalletName = targetWallet.name;
+          } else {
+            transferFromWalletName = targetWallet.name;
+            transferToWalletName = wallet.name;
+          }
+        }
+
+        return trans.copyWith(
+          walletName: wallet.name,
+          categoryName: categoryName,
+          subCategoryName: subCategoryName,
+          transferFromWalletName: transferFromWalletName,
+          transferToWalletName: transferToWalletName,
+        );
+      }).toList();
+    });
+  }
 
   Stream<List<TransactionModel>> getTransactionsStream(
     UserProvider userProvider,
@@ -319,20 +446,15 @@ class DatabaseService {
     DateTime endDate,
   ) {
     if (userProvider.currentUser == null) {
-      return Stream.value([]); // Trả về stream rỗng ngay lập tức
+      return Stream.value([]);
     }
 
-    // 1. Lấy stream của các ví có thể xem
-    return getWalletsStream(userProvider)
-    // 2. Chuyển đổi (map) mỗi danh sách ví thành một danh sách giao dịch
-    .asyncMap((visibleWallets) async {
+    return getWalletsStream(userProvider).asyncMap((visibleWallets) async {
       final visibleWalletIds = visibleWallets.map((w) => w.id).toSet();
       if (visibleWalletIds.isEmpty) {
-        return <TransactionModel>[]; // Trả về danh sách rỗng cho lần emit này
+        return <TransactionModel>[];
       }
 
-      // 3. Thực hiện query một lần để lấy tất cả các giao dịch liên quan
-      // Query theo userId của mình và của partner để thu hẹp phạm vi tìm kiếm
       final currentUserTransactionsSnapshot = await _dbRef
           .child('transactions')
           .orderByChild('userId')
@@ -350,7 +472,6 @@ class DatabaseService {
 
       final allTransactions = <TransactionModel>[];
 
-      // Xử lý giao dịch của người dùng hiện tại
       if (currentUserTransactionsSnapshot.exists) {
         (currentUserTransactionsSnapshot.value as Map).forEach((key, value) {
           allTransactions.add(
@@ -360,13 +481,10 @@ class DatabaseService {
           );
         });
       }
-      // Xử lý giao dịch của partner
+
       if (partnerTransactionsSnapshot != null &&
           partnerTransactionsSnapshot.exists) {
-        // 1. Tạo một biến cục bộ, non-nullable sau khi đã kiểm tra null
         final partnerSnapshot = partnerTransactionsSnapshot;
-
-        // 2. Sử dụng biến cục bộ này một cách an toàn
         (partnerSnapshot.value as Map).forEach((key, value) {
           allTransactions.add(
             TransactionModel.fromSnapshot(partnerSnapshot.child(key)),
@@ -376,15 +494,12 @@ class DatabaseService {
 
       final partnershipCreationDate = userProvider.partnershipCreationDate;
 
-      // 4. Lọc kết quả trên client
       final filteredTransactions = allTransactions.where((transaction) {
         final transactionDate = transaction.date;
 
-        // Điều kiện 1: Giao dịch phải thuộc một trong các ví được xem
         final isWalletVisible = visibleWalletIds.contains(transaction.walletId);
         if (!isWalletVisible) return false;
 
-        // Điều kiện 2: Ngày giao dịch phải nằm trong khoảng thời gian yêu cầu
         final isDateInRange =
             transactionDate.isAfter(
               startDate.subtract(const Duration(days: 1)),
@@ -392,23 +507,18 @@ class DatabaseService {
             transactionDate.isBefore(endDate.add(const Duration(days: 1)));
         if (!isDateInRange) return false;
 
-        // Điều kiện 3: Nếu là của partner, phải xảy ra sau khi kết nối
         if (transaction.userId == userProvider.partnerUid) {
           return partnershipCreationDate != null &&
               transactionDate.isAfter(partnershipCreationDate);
         }
 
-        // Giao dịch của mình thì luôn hợp lệ
         return true;
       }).toList();
 
-      // 5. Sắp xếp và trả về
       filteredTransactions.sort((a, b) => b.date.compareTo(a.date));
       return filteredTransactions;
     });
   }
-
-  // (Bên trong class DatabaseService)
 
   Future<ReportData> getReportData(
     UserProvider userProvider,
@@ -419,10 +529,8 @@ class DatabaseService {
       throw Exception('Người dùng chưa đăng nhập');
     }
 
-    // Bước 1: Lấy tất cả các ví mà người dùng có thể xem
     final visibleWallets = await getWalletsStream(userProvider).first;
     if (visibleWallets.isEmpty) {
-      // Nếu không có ví nào, không thể có dữ liệu báo cáo
       return ReportData(
         expenseByCategory: {},
         incomeByCategory: {},
@@ -430,18 +538,13 @@ class DatabaseService {
       );
     }
 
-    // Bước 2: Lấy tất cả danh mục của người dùng
     final allUserCategories = await getCategoriesStream().first;
-
-    // Bước 3: Lấy tất cả các giao dịch trong khoảng thời gian yêu cầu
-    // Sử dụng lại hàm getTransactionsStream đã được tối ưu
     final validTransactions = await getTransactionsStream(
       userProvider,
       startDate,
       endDate,
     ).first;
 
-    // Bước 4: Khởi tạo các biến để tổng hợp dữ liệu
     double personalIncome = 0;
     double personalExpense = 0;
     double sharedIncome = 0;
@@ -449,12 +552,9 @@ class DatabaseService {
     Map<Category, double> expenseByCategory = {};
     Map<Category, double> incomeByCategory = {};
 
-    // Tạo một Map để tra cứu nhanh xem một ví là chung hay riêng
     final walletOwnerMap = {for (var w in visibleWallets) w.id: w.ownerId};
 
-    // Bước 5: Lặp qua các giao dịch hợp lệ để tính toán
     for (final transaction in validTransactions) {
-      // Xác định giao dịch là cá nhân hay chung
       final ownerId = walletOwnerMap[transaction.walletId];
       final bool isShared = ownerId == userProvider.partnershipId;
 
@@ -465,7 +565,6 @@ class DatabaseService {
           personalIncome += transaction.amount;
         }
 
-        // Tổng hợp thu nhập theo danh mục
         if (transaction.categoryId != null) {
           final category = allUserCategories.firstWhere(
             (c) => c.id == transaction.categoryId,
@@ -489,7 +588,6 @@ class DatabaseService {
           personalExpense += transaction.amount;
         }
 
-        // Tổng hợp chi tiêu theo danh mục
         if (transaction.categoryId != null) {
           final category = allUserCategories.firstWhere(
             (c) => c.id == transaction.categoryId,
@@ -509,15 +607,12 @@ class DatabaseService {
       }
     }
 
-    // Bước 6: "Làm giàu" dữ liệu giao dịch để hiển thị trên UI
-    // (Ví dụ: thêm tên ví, tên danh mục)
     final enrichedTransactions = await _enrichTransactions(
       validTransactions,
       visibleWallets,
       allUserCategories,
     );
 
-    // Bước 7: Trả về đối tượng ReportData hoàn chỉnh
     return ReportData(
       totalIncome: personalIncome + sharedIncome,
       totalExpense: personalExpense + sharedExpense,
@@ -531,13 +626,11 @@ class DatabaseService {
     );
   }
 
-  // HÀM HELPER: Để "làm giàu" dữ liệu giao dịch
   Future<List<TransactionModel>> _enrichTransactions(
     List<TransactionModel> transactions,
     List<Wallet> wallets,
     List<Category> categories,
   ) async {
-    // Tạo Map để tra cứu nhanh, tránh lặp nhiều lần
     final walletMap = {for (var w in wallets) w.id: w.name};
     final categoryMap = {for (var c in categories) c.id: c};
 
@@ -566,107 +659,32 @@ class DatabaseService {
     }).toList();
   }
 
-  Future<void> addTransferTransaction({
-    required String fromWalletId,
-    required String toWalletId,
-    required double amount,
-    String? description,
-    required String fromWalletName,
-    required String toWalletName,
-  }) async {
-    if (_uid == null) return;
-    final userId = _uid!;
-    final date = DateTime.now();
-
-    final finalDescription = description != null && description.isNotEmpty
-        ? description
-        : 'Chuyển tiền';
-
-    // Tạo giao dịch CHI PHÍ từ ví nguồn
-    final expenseTrans = TransactionModel(
-      id: '',
-      amount: amount,
-      type: TransactionType.expense,
-      walletId: fromWalletId,
-      date: date,
-      description: 'Chuyển đến: $toWalletName', // Mô tả rõ ràng hơn
-      userId: userId,
-      transferToWalletId: toWalletName,
-    );
-
-    // Tạo giao dịch THU NHẬP cho ví đích
-    final incomeTrans = TransactionModel(
-      id: '',
-      amount: amount,
-      type: TransactionType.income,
-      walletId: toWalletId,
-      date: date,
-      description: 'Nhận từ: $fromWalletName', // Mô tả rõ ràng hơn
-      userId: userId,
-      transferToWalletId: toWalletName,
-    );
-
-    // Lưu cả hai giao dịch vào database
-    final DatabaseReference transRef = _dbRef.child('transactions');
-    await transRef.push().set(expenseTrans.toJson());
-    await transRef.push().set(incomeTrans.toJson());
-
-    // Cập nhật số dư cho cả hai ví
-    final fromWalletRef = _dbRef.child('wallets').child(fromWalletId);
-    final toWalletRef = _dbRef.child('wallets').child(toWalletId);
-
-    await fromWalletRef.child('balance').set(ServerValue.increment(-amount));
-    await toWalletRef.child('balance').set(ServerValue.increment(amount));
-
-    final fromWalletSnapshot = await _dbRef
-        .child('wallets')
-        .child(fromWalletId)
-        .get();
-    final toWalletSnapshot = await _dbRef
-        .child('wallets')
-        .child(toWalletId)
-        .get();
-
-    if (fromWalletSnapshot.exists) {
-      await fromWalletRef.child('balance').set(ServerValue.increment(-amount));
-    }
-    if (toWalletSnapshot.exists) {
-      await toWalletRef.child('balance').set(ServerValue.increment(amount));
-    }
-  }
-
   Stream<Budget?> getBudgetForMonthStream(String month) {
-    // month format: "yyyy-MM"
     if (_uid == null) return Stream.value(null);
 
     final budgetRef = _dbRef
         .child('budgets')
-        .orderByChild('ownerId_month') // Cần tạo key kết hợp để query
+        .orderByChild('ownerId_month')
         .equalTo('${_uid}_$month');
 
     return budgetRef.onValue.map((event) {
       if (event.snapshot.exists && event.snapshot.children.isNotEmpty) {
-        // Chỉ lấy bản ghi đầu tiên tìm thấy
         return Budget.fromSnapshot(event.snapshot.children.first);
       }
       return null;
     });
   }
 
-  // Lưu hoặc cập nhật ngân sách
   Future<void> saveBudget(Budget budget) async {
     if (_uid == null) return;
 
     DatabaseReference ref;
-    // Nếu budget đã có ID, nghĩa là cập nhật
     if (budget.id.isNotEmpty) {
       ref = _dbRef.child('budgets').child(budget.id);
     } else {
-      // Nếu không, tạo mới
       ref = _dbRef.child('budgets').push();
     }
 
-    // Tạo key kết hợp để có thể query hiệu quả
     final dataToSet = budget.toJson()
       ..['ownerId_month'] = '${budget.ownerId}_${budget.month}';
 
@@ -692,7 +710,6 @@ class DatabaseService {
     double amount,
   ) async {
     try {
-      // Chúng ta sử dụng đường dẫn trực tiếp đến map 'categoryAmounts' và đặt giá trị cho key là categoryId
       await _dbRef
           .child('budgets')
           .child(budgetId)
@@ -711,7 +728,6 @@ class DatabaseService {
   ) async {
     if (_uid == null) return;
     try {
-      // Firebase tự động tạo một key duy nhất cho danh mục con
       final subCategoryRef = _dbRef
           .child('categories')
           .child(_uid!)
@@ -719,7 +735,6 @@ class DatabaseService {
           .child('subCategories')
           .push();
 
-      // Gán tên cho key vừa tạo
       await subCategoryRef.set(subCategoryName);
     } catch (e) {
       print("Lỗi khi thêm danh mục con: $e");
@@ -727,7 +742,6 @@ class DatabaseService {
     }
   }
 
-  // Xóa một danh mục con
   Future<void> deleteSubCategory(
     String parentCategoryId,
     String subCategoryId,
@@ -756,7 +770,6 @@ class DatabaseService {
           .get();
       if (snapshot.exists) {
         final descriptionsMap = snapshot.value as Map<dynamic, dynamic>;
-        // Chuyển keys của Map thành một List<String>
         return descriptionsMap.keys.cast<String>().toList();
       }
       return [];
@@ -769,13 +782,11 @@ class DatabaseService {
   Future<void> saveDescriptionToHistory(String description) async {
     if (_uid == null || description.isEmpty) return;
     try {
-      // Chúng ta dùng `update` để thêm một key mới mà không ghi đè toàn bộ node
       await _dbRef.child('user_descriptions').child(_uid!).update({
         description: true,
       });
     } catch (e) {
       print("Lỗi khi lưu mô tả: $e");
-      // Bỏ qua lỗi này vì nó không quá quan trọng
     }
   }
 
@@ -785,9 +796,6 @@ class DatabaseService {
     required DateTime startDate,
     required DateTime endDate,
   }) async* {
-    // Sử dụng lại hàm getTransactionsStream đã có và lọc trên client.
-    // Đây là cách tiếp cận đơn giản nhất với cấu trúc hiện tại.
-    // Trong một DB lớn hơn, query trực tiếp trên server sẽ tốt hơn.
     await for (final allTransactions in getTransactionsStream(
       userProvider,
       startDate,
@@ -799,22 +807,15 @@ class DatabaseService {
     }
   }
 
-  // HÀM MỚI: Xử lý dữ liệu cho Line Chart
-  // Dữ liệu trả về: Map<Tên tháng, Tổng tiền>
   Map<String, double> groupTransactionsByMonth(
     List<TransactionModel> transactions,
   ) {
-    final DateFormat formatter = DateFormat(
-      'MMM yyyy',
-      'vi_VN',
-    ); // Định dạng "Thg 7 2025"
+    final DateFormat formatter = DateFormat('MMM yyyy', 'vi_VN');
 
-    // Sử dụng `groupBy` từ package `collection`
     final groupedByMonth = groupBy(transactions, (TransactionModel t) {
       return formatter.format(t.date);
     });
 
-    // Tính tổng cho mỗi tháng
     return groupedByMonth.map((month, transList) {
       final total = transList.fold(0.0, (sum, item) => sum + item.amount);
       return MapEntry(month, total);

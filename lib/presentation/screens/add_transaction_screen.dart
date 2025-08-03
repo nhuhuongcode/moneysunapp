@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
-import 'package:moneysun/data/providers/user_provider.dart'; // <-- THÊM MỚI
+import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/services/database_service.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:provider/provider.dart'; // <-- THÊM MỚI
-import 'package:collection/collection.dart';
+import 'package:provider/provider.dart';
 
 class AddTransactionScreen extends StatefulWidget {
   final TransactionModel? transactionToEdit;
+
   const AddTransactionScreen({super.key, this.transactionToEdit});
 
   @override
@@ -19,344 +19,669 @@ class AddTransactionScreen extends StatefulWidget {
 
 class _AddTransactionScreenState extends State<AddTransactionScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _databaseService = DatabaseService();
-  final _auth = FirebaseAuth.instance;
-
-  // Controllers
   final _amountController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final DatabaseService _databaseService = DatabaseService();
 
-  // SỬA LỖI: Đổi kiểu của biến trạng thái từ String thành TransactionType
-  TransactionType _transactionType = TransactionType.expense;
-
-  DateTime _selectedDate = DateTime.now();
-  Wallet? _selectedWallet;
-  Category? _selectedCategory;
-
+  TransactionType _selectedType = TransactionType.expense;
+  String? _selectedWalletId;
+  String? _selectedCategoryId;
   String? _selectedSubCategoryId;
-  List<MapEntry<String, String>> _subCategoryItems = [];
-  List<String> _descriptionSuggestions = [];
-  final TextEditingController _descriptionController = TextEditingController();
-  bool get _isEditing => widget.transactionToEdit != null;
+  DateTime _selectedDate = DateTime.now();
+
+  bool _isLoading = false;
+  List<String> _descriptionHistory = [];
 
   @override
   void initState() {
     super.initState();
-    // THÊM MỚI: Tải danh sách gợi ý khi màn hình được khởi tạo
     _loadDescriptionHistory();
-
-    if (_isEditing) {
-      final trans = widget.transactionToEdit!;
-      _amountController.text = trans.amount.toString();
-      _descriptionController.text = trans.description;
-      _transactionType = trans.type;
-      _selectedDate = trans.date;
-      // Việc lấy _selectedWallet và _selectedCategory sẽ phức tạp hơn một chút
-      // vì chúng là các đối tượng. Chúng ta sẽ lấy chúng từ Stream.
+    if (widget.transactionToEdit != null) {
+      _populateFieldsForEdit();
     }
   }
 
-  // HÀM MỚI: để tải lịch sử mô tả từ service
+  void _populateFieldsForEdit() {
+    final transaction = widget.transactionToEdit!;
+    _amountController.text = transaction.amount.toString();
+    _descriptionController.text = transaction.description;
+    _selectedType = transaction.type;
+    _selectedWalletId = transaction.walletId;
+    _selectedCategoryId = transaction.categoryId;
+    _selectedSubCategoryId = transaction.subCategoryId;
+    _selectedDate = transaction.date;
+  }
+
   Future<void> _loadDescriptionHistory() async {
     final history = await _databaseService.getDescriptionHistory();
-    if (mounted) {
-      setState(() {
-        _descriptionSuggestions = history;
-      });
-    }
+    setState(() {
+      _descriptionHistory = history;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final userProvider = Provider.of<UserProvider>(context, listen: false);
+    final userProvider = Provider.of<UserProvider>(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isEditing ? 'Sửa Giao Dịch' : 'Thêm Giao Dịch Mới'),
+        title: Text(
+          widget.transactionToEdit != null ? 'Sửa giao dịch' : 'Thêm giao dịch',
+        ),
+        actions: [
+          if (_isLoading)
+            const Center(child: CircularProgressIndicator())
+          else
+            TextButton(onPressed: _submitForm, child: const Text('LƯU')),
+        ],
       ),
       body: Form(
         key: _formKey,
-        child: SingleChildScrollView(
+        child: ListView(
           padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextFormField(
-                controller: _amountController,
-                decoration: const InputDecoration(
-                  labelText: 'Số tiền',
-                  prefixIcon: Icon(Icons.money),
-                ),
-                keyboardType: TextInputType.number,
-                validator: (value) => (value == null || value.isEmpty)
-                    ? 'Vui lòng nhập số tiền'
-                    : null,
-              ),
+          children: [
+            // Transaction Type Selector
+            _buildTransactionTypeSelector(),
+            const SizedBox(height: 16),
+
+            // Amount Input
+            _buildAmountInput(),
+            const SizedBox(height: 16),
+
+            // Wallet Selector - FIX: Chỉ hiển thị ví có thể chọn
+            _buildWalletSelector(userProvider),
+            const SizedBox(height: 16),
+
+            // Category Selector - FIX: Khác nhau cho income và expense
+            _buildCategorySelector(),
+            const SizedBox(height: 16),
+
+            // Sub Category Selector (chỉ hiển thị khi có category được chọn)
+            if (_selectedCategoryId != null) ...[
+              _buildSubCategorySelector(),
               const SizedBox(height: 16),
-
-              SegmentedButton<TransactionType>(
-                segments: const <ButtonSegment<TransactionType>>[
-                  ButtonSegment<TransactionType>(
-                    value: TransactionType.expense,
-                    label: Text('Chi phí'),
-                    icon: Icon(Icons.arrow_downward),
-                  ),
-                  ButtonSegment<TransactionType>(
-                    value: TransactionType.income,
-                    label: Text('Thu nhập'),
-                    icon: Icon(Icons.arrow_upward),
-                  ),
-                ],
-                selected: {_transactionType},
-                onSelectionChanged: (Set<TransactionType> newSelection) {
-                  setState(() {
-                    _transactionType = newSelection.first;
-                  });
-                },
-              ),
-              const SizedBox(height: 16),
-
-              _buildWalletsDropdown(userProvider),
-              const SizedBox(height: 16),
-
-              // SỬA LỖI: Điều kiện if giờ so sánh với enum
-              if (_transactionType == TransactionType.expense)
-                _buildCategoriesDropdown(),
-
-              const SizedBox(height: 16),
-              if (_subCategoryItems
-                  .isNotEmpty) // Chỉ hiển thị nếu có sub-category
-                _buildSubCategoriesDropdown(),
-              ListTile(
-                leading: const Icon(Icons.calendar_today),
-                title: Text(
-                  'Ngày: ${DateFormat('dd/MM/yyyy').format(_selectedDate)}',
-                ),
-                onTap: _pickDate,
-              ),
-              Autocomplete<String>(
-                // `optionsBuilder` được gọi mỗi khi người dùng gõ
-                optionsBuilder: (TextEditingValue textEditingValue) {
-                  // Nếu người dùng chưa gõ gì, không hiển thị gợi ý
-                  if (textEditingValue.text == '') {
-                    return const Iterable<String>.empty();
-                  }
-                  // Lọc danh sách gợi ý để tìm những mục chứa nội dung đang gõ
-                  return _descriptionSuggestions.where((String option) {
-                    return option.toLowerCase().contains(
-                      textEditingValue.text.toLowerCase(),
-                    );
-                  });
-                },
-                // `onSelected` được gọi khi người dùng chọn một gợi ý
-                onSelected: (String selection) {
-                  // Cập nhật text trong ô nhập liệu
-                  _descriptionController.text = selection;
-                },
-                // `fieldViewBuilder` để tùy chỉnh giao diện của ô nhập liệu
-                fieldViewBuilder:
-                    (
-                      BuildContext context,
-                      TextEditingController fieldController,
-                      FocusNode fieldFocusNode,
-                      VoidCallback onFieldSubmitted,
-                    ) {
-                      // Gán controller của chúng ta cho controller của Autocomplete
-                      // Điều này quan trọng để có thể lấy giá trị khi submit form
-                      _descriptionController.text = fieldController.text;
-
-                      return TextFormField(
-                        controller: fieldController,
-                        focusNode: fieldFocusNode,
-                        decoration: const InputDecoration(
-                          labelText: 'Mô tả',
-                          prefixIcon: Icon(Icons.description),
-                        ),
-                      );
-                    },
-              ),
-              const SizedBox(height: 32),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _submitForm,
-                  child: const Text('Lưu Giao Dịch'),
-                ),
-              ),
             ],
-          ),
+
+            // Date Picker
+            _buildDateSelector(),
+            const SizedBox(height: 16),
+
+            // Description Input với suggestions
+            _buildDescriptionInput(),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildWalletsDropdown(UserProvider userProvider) {
-    return StreamBuilder<List<Wallet>>(
-      stream: _databaseService.getWalletsStream(userProvider),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) return const CircularProgressIndicator();
-        final wallets = snapshot.data!.where((wallet) {
-          // Chỉ giữ lại ví của chính mình HOẶC ví chung
-          return wallet.ownerId == userProvider.currentUser!.uid ||
-              wallet.ownerId == userProvider.partnershipId;
-        }).toList();
-        if (_selectedWallet != null &&
-            !wallets.any((w) => w.id == _selectedWallet!.id)) {
-          _selectedWallet = null;
-        }
-
-        if (_isEditing &&
-            widget.transactionToEdit!.walletId.isNotEmpty &&
-            _selectedWallet == null) {
-          _selectedWallet = wallets.firstWhereOrNull(
-            (w) => w.id == widget.transactionToEdit!.walletId,
-          );
-        }
-        return DropdownButtonFormField<Wallet>(
-          value: _selectedWallet,
-          isExpanded: true,
-          hint: const Text('Chọn ví'),
-          decoration: const InputDecoration(prefixIcon: Icon(Icons.wallet)),
-          items: wallets.map((wallet) {
-            String walletDisplayName = wallet.name;
-            // Logic thêm nhãn "Chung" giờ sẽ luôn đúng
-            if (wallet.ownerId == userProvider.partnershipId) {
-              walletDisplayName += " (Chung)";
-            }
-            return DropdownMenuItem<Wallet>(
-              value: wallet,
-              child: Text(walletDisplayName),
-            );
-          }).toList(),
-          onChanged: (wallet) => setState(() => _selectedWallet = wallet),
-          validator: (value) => value == null ? 'Vui lòng chọn ví' : null,
-        );
-      },
-    );
-  }
-
-  Widget _buildCategoriesDropdown() {
-    return StreamBuilder<List<Category>>(
-      stream: _databaseService.getCategoriesStream(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) return const SizedBox.shrink();
-
-        final String requiredCategoryType =
-            _transactionType == TransactionType.income ? 'income' : 'expense';
-
-        final transactionTypeString =
-            _transactionType.name; // 'expense' hoặc 'income'
-        final categories = snapshot.data!
-            .where((cat) => cat.type == requiredCategoryType)
-            .toList();
-        if (_selectedCategory != null &&
-            !categories.any((c) => c.id == _selectedCategory!.id)) {
-          _selectedCategory = null;
-          _selectedSubCategoryId = null;
-          _subCategoryItems = [];
-        }
-
-        if (_isEditing &&
-            widget.transactionToEdit!.categoryId != null &&
-            _selectedCategory == null) {
-          _selectedCategory = categories.firstWhereOrNull(
-            (c) => c.id == widget.transactionToEdit!.categoryId,
-          );
-          // Cập nhật danh sách sub-category nếu tìm thấy category cha
-          if (_selectedCategory != null) {
-            _subCategoryItems = _selectedCategory!.subCategories.entries
-                .toList();
-            _selectedSubCategoryId = widget.transactionToEdit!.subCategoryId;
-          }
-        }
-        return DropdownButtonFormField<Category>(
-          value: _selectedCategory,
-          hint: Text(
-            requiredCategoryType == 'income'
-                ? 'Chọn danh mục thu'
-                : 'Chọn danh mục chi',
-          ),
-          decoration: const InputDecoration(prefixIcon: Icon(Icons.category)),
-          items: categories.map((cat) {
-            return DropdownMenuItem<Category>(
-              value: cat,
-              child: Text(cat.name),
-            );
-          }).toList(),
-          onChanged: (cat) {
-            setState(() {
-              _selectedCategory = cat;
-              // KHI CHỌN CATEGORY CHA, CẬP NHẬT DANH SÁCH SUB-CATEGORY
-              _selectedSubCategoryId = null; // Reset lựa chọn cũ
-              if (cat != null && cat.subCategories.isNotEmpty) {
-                _subCategoryItems = cat.subCategories.entries.toList();
-              } else {
-                _subCategoryItems = [];
-              }
-            });
-          },
-          validator: (value) =>
-              (_transactionType == TransactionType.expense && value == null)
-              ? 'Vui lòng chọn danh mục'
-              : null,
-        );
-      },
-    );
-  }
-
-  Widget _buildSubCategoriesDropdown() {
-    return DropdownButtonFormField<String>(
-      value: _selectedSubCategoryId,
-      hint: const Text('Chọn danh mục con (tùy chọn)'),
-      decoration: const InputDecoration(
-        prefixIcon: Icon(Icons.label_important_outline),
+  Widget _buildTransactionTypeSelector() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Loại giao dịch',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: RadioListTile<TransactionType>(
+                    title: const Text('Chi tiêu'),
+                    value: TransactionType.expense,
+                    groupValue: _selectedType,
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedType = value!;
+                        // Reset category khi đổi type
+                        _selectedCategoryId = null;
+                        _selectedSubCategoryId = null;
+                      });
+                    },
+                  ),
+                ),
+                Expanded(
+                  child: RadioListTile<TransactionType>(
+                    title: const Text('Thu nhập'),
+                    value: TransactionType.income,
+                    groupValue: _selectedType,
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedType = value!;
+                        // Reset category khi đổi type
+                        _selectedCategoryId = null;
+                        _selectedSubCategoryId = null;
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
-      items: _subCategoryItems.map((sub) {
-        // sub.key là ID, sub.value là tên
-        return DropdownMenuItem<String>(value: sub.key, child: Text(sub.value));
-      }).toList(),
-      onChanged: (subId) => setState(() => _selectedSubCategoryId = subId),
-      // Không cần validator vì đây là tùy chọn
     );
   }
 
-  Future<void> _pickDate() async {
-    final pickedDate = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2101),
+  Widget _buildAmountInput() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: TextFormField(
+          controller: _amountController,
+          decoration: const InputDecoration(
+            labelText: 'Số tiền *',
+            border: OutlineInputBorder(),
+            suffixText: '₫',
+          ),
+          keyboardType: TextInputType.number,
+          validator: (value) {
+            if (value == null || value.isEmpty) {
+              return 'Vui lòng nhập số tiền';
+            }
+            final amount = double.tryParse(value);
+            if (amount == null || amount <= 0) {
+              return 'Số tiền phải lớn hơn 0';
+            }
+            return null;
+          },
+        ),
+      ),
     );
-    if (pickedDate != null && pickedDate != _selectedDate) {
+  }
+
+  // FIX: Wallet selector chỉ hiển thị ví có thể chọn
+  Widget _buildWalletSelector(UserProvider userProvider) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Chọn ví *',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<List<Wallet>>(
+              // FIX: Sử dụng getSelectableWalletsStream thay vì getWalletsStream
+              stream: _databaseService.getSelectableWalletsStream(userProvider),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) {
+                  return const CircularProgressIndicator();
+                }
+
+                final wallets = snapshot.data!;
+                if (wallets.isEmpty) {
+                  return const Text('Không có ví nào. Hãy tạo ví trước!');
+                }
+
+                return DropdownButtonFormField<String>(
+                  value: _selectedWalletId,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                  ),
+                  hint: const Text('Chọn ví'),
+                  items: wallets.map((wallet) {
+                    String displayName = wallet.name;
+
+                    // Thêm tag để phân biệt loại ví
+                    if (wallet.ownerId == userProvider.partnershipId) {
+                      displayName += ' (Chung)';
+                    } else if (wallet.ownerId ==
+                        FirebaseAuth.instance.currentUser?.uid) {
+                      displayName += ' (Cá nhân)';
+                    }
+
+                    return DropdownMenuItem(
+                      value: wallet.id,
+                      child: Text(displayName),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    setState(() {
+                      _selectedWalletId = value;
+                    });
+                  },
+                  validator: (value) {
+                    if (value == null) {
+                      return 'Vui lòng chọn ví';
+                    }
+                    return null;
+                  },
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // FIX: Category selector riêng biệt cho income và expense
+  Widget _buildCategorySelector() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _selectedType == TransactionType.income
+                  ? 'Nguồn thu nhập'
+                  : 'Danh mục chi tiêu',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<List<Category>>(
+              // FIX: Lấy categories theo type
+              stream: _databaseService.getCategoriesByTypeStream(
+                _selectedType == TransactionType.income ? 'income' : 'expense',
+              ),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) {
+                  return const CircularProgressIndicator();
+                }
+
+                final categories = snapshot.data!;
+
+                // Nếu là income mà không có category nào
+                if (_selectedType == TransactionType.income &&
+                    categories.isEmpty) {
+                  return Column(
+                    children: [
+                      const Text(
+                        'Chưa có danh mục thu nhập. Hãy tạo danh mục trước!',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                      const SizedBox(height: 8),
+                      ElevatedButton(
+                        onPressed: () => _showAddCategoryDialog(),
+                        child: const Text('Tạo danh mục thu nhập'),
+                      ),
+                    ],
+                  );
+                }
+
+                return Column(
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: _selectedCategoryId,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                      ),
+                      hint: Text(
+                        _selectedType == TransactionType.income
+                            ? 'Chọn nguồn thu nhập'
+                            : 'Chọn danh mục',
+                      ),
+                      items: categories.map((category) {
+                        return DropdownMenuItem(
+                          value: category.id,
+                          child: Text(category.name),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedCategoryId = value;
+                          _selectedSubCategoryId = null; // Reset sub category
+                        });
+                      },
+                      // FIX: Category không bắt buộc cho income
+                      validator: _selectedType == TransactionType.expense
+                          ? (value) {
+                              if (value == null) {
+                                return 'Vui lòng chọn danh mục';
+                              }
+                              return null;
+                            }
+                          : null,
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: () => _showAddCategoryDialog(),
+                        icon: const Icon(Icons.add),
+                        label: Text(
+                          'Thêm danh mục ${_selectedType == TransactionType.income ? "thu nhập" : "chi tiêu"}',
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSubCategorySelector() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Danh mục con (tùy chọn)',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<List<Category>>(
+              stream: _databaseService.getCategoriesStream(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) {
+                  return const CircularProgressIndicator();
+                }
+
+                final categories = snapshot.data!;
+                final selectedCategory = categories.firstWhere(
+                  (cat) => cat.id == _selectedCategoryId,
+                  orElse: () => const Category(
+                    id: '',
+                    name: '',
+                    ownerId: '',
+                    type: 'expense',
+                  ),
+                );
+
+                if (selectedCategory.subCategories.isEmpty) {
+                  return Column(
+                    children: [
+                      const Text(
+                        'Chưa có danh mục con',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                      TextButton.icon(
+                        onPressed: () =>
+                            _showAddSubCategoryDialog(selectedCategory.id),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Thêm danh mục con'),
+                      ),
+                    ],
+                  );
+                }
+
+                return Column(
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: _selectedSubCategoryId,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                      ),
+                      hint: const Text('Chọn danh mục con (tùy chọn)'),
+                      items: selectedCategory.subCategories.entries.map((
+                        entry,
+                      ) {
+                        return DropdownMenuItem(
+                          value: entry.key,
+                          child: Text(entry.value),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedSubCategoryId = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: () =>
+                            _showAddSubCategoryDialog(selectedCategory.id),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Thêm danh mục con'),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDateSelector() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Ngày giao dịch',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: () async {
+                final date = await showDatePicker(
+                  context: context,
+                  initialDate: _selectedDate,
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                );
+                if (date != null) {
+                  final time = await showTimePicker(
+                    context: context,
+                    initialTime: TimeOfDay.fromDateTime(_selectedDate),
+                  );
+                  setState(() {
+                    _selectedDate = DateTime(
+                      date.year,
+                      date.month,
+                      date.day,
+                      time?.hour ?? _selectedDate.hour,
+                      time?.minute ?? _selectedDate.minute,
+                    );
+                  });
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.calendar_today),
+                    const SizedBox(width: 8),
+                    Text(DateFormat('dd/MM/yyyy, HH:mm').format(_selectedDate)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDescriptionInput() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Mô tả (tùy chọn)',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: _descriptionController,
+              decoration: const InputDecoration(
+                labelText: 'Nhập mô tả...',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 2,
+            ),
+            // FIX: Gợi ý mô tả từ lịch sử
+            if (_descriptionHistory.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'Gợi ý từ lịch sử:',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 8,
+                children: _descriptionHistory.take(5).map((desc) {
+                  return ActionChip(
+                    label: Text(desc),
+                    onPressed: () {
+                      _descriptionController.text = desc;
+                    },
+                  );
+                }).toList(),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showAddCategoryDialog() {
+    final nameController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          'Thêm ${_selectedType == TransactionType.income ? "nguồn thu nhập" : "danh mục chi tiêu"}',
+        ),
+        content: TextField(
+          controller: nameController,
+          decoration: const InputDecoration(
+            labelText: 'Tên danh mục',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final name = nameController.text.trim();
+              if (name.isNotEmpty) {
+                await _databaseService.addCategory(
+                  name,
+                  _selectedType == TransactionType.income
+                      ? 'income'
+                      : 'expense',
+                );
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Thêm'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddSubCategoryDialog(String parentCategoryId) {
+    final nameController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Thêm danh mục con'),
+        content: TextField(
+          controller: nameController,
+          decoration: const InputDecoration(
+            labelText: 'Tên danh mục con',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final name = nameController.text.trim();
+              if (name.isNotEmpty) {
+                await _databaseService.addSubCategory(parentCategoryId, name);
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Thêm'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _submitForm() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final amount = double.parse(_amountController.text);
+      final transaction = TransactionModel(
+        id: widget.transactionToEdit?.id ?? '',
+        amount: amount,
+        type: _selectedType,
+        categoryId: _selectedCategoryId,
+        subCategoryId: _selectedSubCategoryId,
+        walletId: _selectedWalletId!,
+        date: _selectedDate,
+        description: _descriptionController.text.trim(),
+        userId: FirebaseAuth.instance.currentUser!.uid,
+      );
+
+      if (widget.transactionToEdit != null) {
+        // Sửa giao dịch
+        await _databaseService.updateTransaction(
+          transaction,
+          widget.transactionToEdit!,
+        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Đã cập nhật giao dịch')));
+      } else {
+        // Thêm giao dịch mới
+        await _databaseService.addTransaction(transaction);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Đã thêm giao dịch')));
+      }
+
+      Navigator.pop(context);
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+    } finally {
       setState(() {
-        _selectedDate = pickedDate;
+        _isLoading = false;
       });
     }
   }
 
-  void _submitForm() {
-    if (_formKey.currentState!.validate()) {
-      final transaction = TransactionModel(
-        id: _isEditing ? widget.transactionToEdit!.id : '',
-        amount: double.parse(_amountController.text),
-        type: _transactionType,
-        walletId: _selectedWallet!.id,
-        categoryId: _selectedCategory?.id,
-        subCategoryId: _selectedSubCategoryId,
-        date: _selectedDate,
-        description: _descriptionController.text,
-        userId: _auth.currentUser!.uid,
-      );
-      if (_isEditing) {
-        // Gọi hàm sửa (cần tạo trong DatabaseService)
-        _databaseService.updateTransaction(
-          transaction,
-          widget.transactionToEdit!,
-        );
-      } else {
-        // Gọi hàm thêm như cũ
-        _databaseService.addTransaction(transaction);
-      }
-      Navigator.pop(context);
-    }
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
   }
 }

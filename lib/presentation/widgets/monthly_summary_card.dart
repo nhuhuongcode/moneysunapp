@@ -21,20 +21,21 @@ class MonthlySummaryCard extends StatelessWidget {
     );
 
     return FutureBuilder<ReportData>(
-      // Lấy dữ liệu báo cáo cho tháng hiện tại
       future: databaseService.getReportData(userProvider, startDate, endDate),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Card(
             child: Padding(
               padding: EdgeInsets.all(16.0),
-              child: Text("Đang tải..."),
+              child: Center(child: CircularProgressIndicator()),
             ),
           );
         }
 
         final report = snapshot.data!;
-        final balance = report.totalIncome - report.totalExpense;
+        final totalBalance = report.totalIncome - report.totalExpense;
+        final personalBalance = report.personalIncome - report.personalExpense;
+        final sharedBalance = report.sharedIncome - report.sharedExpense;
 
         return Card(
           elevation: 4,
@@ -43,72 +44,143 @@ class MonthlySummaryCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Header
                 Text(
-                  'Tổng quan tháng ${now.month}',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 12),
-                Center(
-                  child: Text(
-                    currencyFormatter.format(balance),
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      color: balance >= 0 ? Colors.green : Colors.red,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  'Tổng quan tháng ${now.month}/${now.year}',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-                const Text(
-                  'Số dư cuối tháng',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey),
+                const SizedBox(height: 12),
+
+                // Số dư tổng
+                Center(
+                  child: Column(
+                    children: [
+                      Text(
+                        currencyFormatter.format(totalBalance),
+                        style: Theme.of(context).textTheme.headlineMedium
+                            ?.copyWith(
+                              color: totalBalance >= 0
+                                  ? Colors.green
+                                  : Colors.red,
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                      const Text(
+                        'Số dư cuối tháng',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                    ],
+                  ),
                 ),
+
                 const Divider(height: 24),
+
+                // FIX: Tổng thu chi (Personal + Shared)
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _buildIncomeExpense(
-                      "Thu nhập",
+                    _buildIncomeExpenseSummary(
+                      "Tổng thu nhập",
                       report.totalIncome,
                       Colors.green,
                       currencyFormatter,
                     ),
-                    _buildIncomeExpense(
-                      "Chi tiêu",
+                    _buildIncomeExpenseSummary(
+                      "Tổng chi tiêu",
                       report.totalExpense,
                       Colors.red,
                       currencyFormatter,
                     ),
                   ],
                 ),
-                const Divider(height: 24),
-                _buildIncomeExpense(
-                  "Thu nhập Cá nhân",
-                  report.personalIncome,
-                  Colors.green,
+
+                const Divider(height: 20),
+
+                // FIX: Thu chi cá nhân
+                _buildSectionTitle(
+                  '💼 Cá nhân',
+                  personalBalance,
                   currencyFormatter,
                 ),
                 const SizedBox(height: 8),
-                _buildIncomeExpense(
-                  "Chi tiêu Cá nhân",
-                  report.personalExpense,
-                  Colors.red,
-                  currencyFormatter,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _buildIncomeExpenseSummary(
+                      "Thu nhập",
+                      report.personalIncome,
+                      Colors.green.shade600,
+                      currencyFormatter,
+                    ),
+                    _buildIncomeExpenseSummary(
+                      "Chi tiêu",
+                      report.personalExpense,
+                      Colors.red.shade600,
+                      currencyFormatter,
+                    ),
+                  ],
                 ),
 
-                if (userProvider.partnershipId != null) ...[
-                  const Divider(height: 16, indent: 20, endIndent: 20),
-                  _buildIncomeExpense(
-                    "Thu nhập Chung",
-                    report.sharedIncome,
-                    Colors.green.shade300,
+                // FIX: Thu chi chung (chỉ hiển thị khi có partner)
+                if (userProvider.hasPartner) ...[
+                  const Divider(height: 20),
+                  _buildSectionTitle(
+                    '👥 Chung (${userProvider.partnerDisplayName ?? "Đối tác"})',
+                    sharedBalance,
                     currencyFormatter,
                   ),
                   const SizedBox(height: 8),
-                  _buildIncomeExpense(
-                    "Chi tiêu Chung",
-                    report.sharedExpense,
-                    Colors.red.shade300,
-                    currencyFormatter,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _buildIncomeExpenseSummary(
+                        "Thu nhập",
+                        report.sharedIncome,
+                        Colors.green.shade400,
+                        currencyFormatter,
+                      ),
+                      _buildIncomeExpenseSummary(
+                        "Chi tiêu",
+                        report.sharedExpense,
+                        Colors.red.shade400,
+                        currencyFormatter,
+                      ),
+                    ],
+                  ),
+                ],
+
+                // Thông tin partnership (nếu có)
+                if (userProvider.hasPartner) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.people,
+                          color: Colors.blue.shade600,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Đang kết nối với ${userProvider.partnerDisplayName ?? "đối tác"}',
+                            style: TextStyle(
+                              color: Colors.blue.shade700,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ],
@@ -119,26 +191,58 @@ class MonthlySummaryCard extends StatelessWidget {
     );
   }
 
-  Widget _buildIncomeExpense(
+  // FIX: Build section title với balance
+  Widget _buildSectionTitle(
+    String title,
+    double balance,
+    NumberFormat formatter,
+  ) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+        ),
+        Text(
+          formatter.format(balance),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 14,
+            color: balance >= 0 ? Colors.green.shade700 : Colors.red.shade700,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildIncomeExpenseSummary(
     String title,
     double amount,
     Color color,
     NumberFormat formatter,
   ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: const TextStyle(color: Colors.grey, fontSize: 14)),
-        const SizedBox(height: 4),
-        Text(
-          formatter.format(amount),
-          style: TextStyle(
-            color: color,
-            fontWeight: FontWeight.bold,
-            fontSize: 16,
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(color: Colors.grey, fontSize: 12),
+            textAlign: TextAlign.center,
           ),
-        ),
-      ],
+          const SizedBox(height: 4),
+          Text(
+            formatter.format(amount),
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
     );
   }
 }
