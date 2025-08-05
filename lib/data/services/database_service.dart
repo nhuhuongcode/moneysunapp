@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:intl/intl.dart';
 import 'package:moneysun/data/models/budget_model.dart';
+import 'package:moneysun/data/models/partnership_model.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
 import 'package:moneysun/data/models/report_data_model.dart';
@@ -820,5 +821,70 @@ class DatabaseService {
       final total = transList.fold(0.0, (sum, item) => sum + item.amount);
       return MapEntry(month, total);
     });
+  }
+
+  Future<void> syncPartnership(String partnershipId) async {
+    if (_uid == null) return;
+
+    final partnershipRef = _dbRef.child('partnerships').child(partnershipId);
+    final userRef = _dbRef.child('users').child(_uid!);
+
+    await partnershipRef.update({
+      'lastSyncTime': ServerValue.timestamp,
+      'isActive': true,
+    });
+
+    // Cập nhật thông tin user
+    await userRef.update({
+      'partnershipId': partnershipId,
+      'lastSync': ServerValue.timestamp,
+    });
+  }
+
+  Future<void> handlePartnershipInvite(String inviteCode) async {
+    if (_uid == null) return;
+
+    final snapshot = await _dbRef
+        .child('users')
+        .orderByChild('inviteCode')
+        .equalTo(inviteCode)
+        .get();
+
+    if (snapshot.exists) {
+      final partnerData = (snapshot.value as Map).entries.first;
+      final partnerUid = partnerData.key;
+      final partnerInfo = partnerData.value as Map;
+
+      // Tạo partnership mới
+      final newPartnershipRef = _dbRef.child('partnerships').push();
+      final partnership = Partnership(
+        id: newPartnershipRef.key!,
+        memberIds: [_uid!, partnerUid],
+        createdAt: DateTime.now(),
+        memberNames: {
+          _uid: FirebaseAuth.instance.currentUser!.displayName ?? '',
+          partnerUid: partnerInfo['displayName'] ?? '',
+        },
+      );
+
+      // Cập nhật partnership
+      await newPartnershipRef.set(partnership.toJson());
+
+      // Cập nhật thông tin cho cả 2 user
+      await Future.wait([
+        _dbRef.child('users').child(_uid!).update({
+          'partnerUid': partnerUid,
+          'partnershipId': partnership.id,
+          'partnerDisplayName': partnerInfo['displayName'],
+          'partnershipCreatedAt': ServerValue.timestamp,
+        }),
+        _dbRef.child('users').child(partnerUid).update({
+          'partnerUid': _uid,
+          'partnershipId': partnership.id,
+          'partnerDisplayName': FirebaseAuth.instance.currentUser!.displayName,
+          'partnershipCreatedAt': ServerValue.timestamp,
+        }),
+      ]);
+    }
   }
 }

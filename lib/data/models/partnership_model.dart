@@ -5,12 +5,16 @@ class Partnership {
   final List<String> memberIds;
   final DateTime createdAt;
   final Map<String, String> memberNames; // uid -> displayName
+  final bool isActive;
+  final DateTime? lastSyncTime;
 
   Partnership({
     required this.id,
     required this.memberIds,
     required this.createdAt,
     required this.memberNames,
+    this.isActive = true,
+    this.lastSyncTime,
   });
 
   factory Partnership.fromSnapshot(DataSnapshot snapshot) {
@@ -25,6 +29,10 @@ class Partnership {
       memberNames: memberNames.map(
         (key, value) => MapEntry(key.toString(), value.toString()),
       ),
+      isActive: data['isActive'] ?? true,
+      lastSyncTime: data['lastSyncTime'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(data['lastSyncTime'])
+          : null,
     );
   }
 
@@ -33,6 +41,8 @@ class Partnership {
       'members': {for (var id in memberIds) id: true},
       'memberNames': memberNames,
       'createdAt': ServerValue.timestamp,
+      'isActive': isActive,
+      'lastSyncTime': ServerValue.timestamp,
     };
   }
 }

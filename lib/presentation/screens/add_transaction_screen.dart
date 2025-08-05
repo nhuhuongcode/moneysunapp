@@ -65,443 +65,650 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
     return Scaffold(
       appBar: AppBar(
+        elevation: 0,
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        leading: IconButton(
+          icon: const Icon(Icons.close, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
         title: Text(
           widget.transactionToEdit != null ? 'Sửa giao dịch' : 'Thêm giao dịch',
-        ),
-        actions: [
-          if (_isLoading)
-            const Center(child: CircularProgressIndicator())
-          else
-            TextButton(onPressed: _submitForm, child: const Text('LƯU')),
-        ],
-      ),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: const EdgeInsets.all(16.0),
-          children: [
-            // Transaction Type Selector
-            _buildTransactionTypeSelector(),
-            const SizedBox(height: 16),
-
-            // Amount Input
-            _buildAmountInput(),
-            const SizedBox(height: 16),
-
-            // Wallet Selector - FIX: Chỉ hiển thị ví có thể chọn
-            _buildWalletSelector(userProvider),
-            const SizedBox(height: 16),
-
-            // Category Selector - FIX: Khác nhau cho income và expense
-            _buildCategorySelector(),
-            const SizedBox(height: 16),
-
-            // Sub Category Selector (chỉ hiển thị khi có category được chọn)
-            if (_selectedCategoryId != null) ...[
-              _buildSubCategorySelector(),
-              const SizedBox(height: 16),
-            ],
-
-            // Date Picker
-            _buildDateSelector(),
-            const SizedBox(height: 16),
-
-            // Description Input với suggestions
-            _buildDescriptionInput(),
-          ],
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
         ),
       ),
-    );
-  }
-
-  Widget _buildTransactionTypeSelector() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Loại giao dịch',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Row(
+      body: Stack(
+        children: [
+          Form(
+            key: _formKey,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(
+                16.0,
+                16.0,
+                16.0,
+                80.0,
+              ), // Thêm padding bottom để tránh che khuất
               children: [
-                Expanded(
-                  child: RadioListTile<TransactionType>(
-                    title: const Text('Chi tiêu'),
-                    value: TransactionType.expense,
-                    groupValue: _selectedType,
-                    onChanged: (value) {
-                      setState(() {
-                        _selectedType = value!;
-                        // Reset category khi đổi type
-                        _selectedCategoryId = null;
-                        _selectedSubCategoryId = null;
-                      });
-                    },
-                  ),
-                ),
-                Expanded(
-                  child: RadioListTile<TransactionType>(
-                    title: const Text('Thu nhập'),
-                    value: TransactionType.income,
-                    groupValue: _selectedType,
-                    onChanged: (value) {
-                      setState(() {
-                        _selectedType = value!;
-                        // Reset category khi đổi type
-                        _selectedCategoryId = null;
-                        _selectedSubCategoryId = null;
-                      });
-                    },
-                  ),
-                ),
+                _buildTransactionTypeSelector(),
+                const SizedBox(height: 16),
+                _buildAmountInput(),
+                const SizedBox(height: 16),
+                _buildWalletSelector(userProvider),
+                const SizedBox(height: 16),
+                _buildCategorySelector(),
+                if (_selectedCategoryId != null) ...[
+                  const SizedBox(height: 16),
+                  _buildSubCategorySelector(),
+                ],
+                const SizedBox(height: 16),
+                _buildDateSelector(),
+                const SizedBox(height: 16),
+                _buildDescriptionInput(),
               ],
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAmountInput() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: TextFormField(
-          controller: _amountController,
-          decoration: const InputDecoration(
-            labelText: 'Số tiền *',
-            border: OutlineInputBorder(),
-            suffixText: '₫',
           ),
-          keyboardType: TextInputType.number,
-          validator: (value) {
-            if (value == null || value.isEmpty) {
-              return 'Vui lòng nhập số tiền';
-            }
-            final amount = double.tryParse(value);
-            if (amount == null || amount <= 0) {
-              return 'Số tiền phải lớn hơn 0';
-            }
-            return null;
-          },
-        ),
-      ),
-    );
-  }
-
-  // FIX: Wallet selector chỉ hiển thị ví có thể chọn
-  Widget _buildWalletSelector(UserProvider userProvider) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Chọn ví *',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            StreamBuilder<List<Wallet>>(
-              // FIX: Sử dụng getSelectableWalletsStream thay vì getWalletsStream
-              stream: _databaseService.getSelectableWalletsStream(userProvider),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const CircularProgressIndicator();
-                }
-
-                final wallets = snapshot.data!;
-                if (wallets.isEmpty) {
-                  return const Text('Không có ví nào. Hãy tạo ví trước!');
-                }
-
-                return DropdownButtonFormField<String>(
-                  value: _selectedWalletId,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
+          // Nút hoàn thành cố định ở dưới cùng
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: Container(
+              padding: const EdgeInsets.all(16.0),
+              decoration: BoxDecoration(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, -2),
                   ),
-                  hint: const Text('Chọn ví'),
-                  items: wallets.map((wallet) {
-                    String displayName = wallet.name;
-
-                    // Thêm tag để phân biệt loại ví
-                    if (wallet.ownerId == userProvider.partnershipId) {
-                      displayName += ' (Chung)';
-                    } else if (wallet.ownerId ==
-                        FirebaseAuth.instance.currentUser?.uid) {
-                      displayName += ' (Cá nhân)';
-                    }
-
-                    return DropdownMenuItem(
-                      value: wallet.id,
-                      child: Text(displayName),
-                    );
-                  }).toList(),
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedWalletId = value;
-                    });
-                  },
-                  validator: (value) {
-                    if (value == null) {
-                      return 'Vui lòng chọn ví';
-                    }
-                    return null;
-                  },
-                );
-              },
+                ],
+              ),
+              child: ElevatedButton(
+                onPressed: _isLoading ? null : _submitForm,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: _isLoading
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(color: Colors.white),
+                      )
+                    : const Text(
+                        'HOÀN THÀNH',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+              ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  // FIX: Category selector riêng biệt cho income và expense
-  Widget _buildCategorySelector() {
+  Widget _buildCard({required String title, required Widget child}) {
     return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              _selectedType == TransactionType.income
-                  ? 'Nguồn thu nhập'
-                  : 'Danh mục chi tiêu',
-              style: const TextStyle(fontWeight: FontWeight.bold),
+              title,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 8),
-            StreamBuilder<List<Category>>(
-              // FIX: Lấy categories theo type
-              stream: _databaseService.getCategoriesByTypeStream(
-                _selectedType == TransactionType.income ? 'income' : 'expense',
-              ),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const CircularProgressIndicator();
-                }
+            const SizedBox(height: 12),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
 
-                final categories = snapshot.data!;
-
-                // Nếu là income mà không có category nào
-                if (_selectedType == TransactionType.income &&
-                    categories.isEmpty) {
-                  return Column(
-                    children: [
-                      const Text(
-                        'Chưa có danh mục thu nhập. Hãy tạo danh mục trước!',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                      const SizedBox(height: 8),
-                      ElevatedButton(
-                        onPressed: () => _showAddCategoryDialog(),
-                        child: const Text('Tạo danh mục thu nhập'),
-                      ),
-                    ],
-                  );
-                }
-
-                return Column(
+  // Cập nhật style cho transaction type selector
+  Widget _buildTransactionTypeSelector() {
+    return _buildCard(
+      title: 'Loại giao dịch',
+      child: Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              onTap: () => setState(() {
+                _selectedType = TransactionType.expense;
+                _selectedCategoryId = null;
+                _selectedSubCategoryId = null;
+              }),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: _selectedType == TransactionType.expense
+                      ? Theme.of(context).colorScheme.primary.withOpacity(0.1)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: _selectedType == TransactionType.expense
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.grey.shade300,
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    DropdownButtonFormField<String>(
-                      value: _selectedCategoryId,
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                      ),
-                      hint: Text(
-                        _selectedType == TransactionType.income
-                            ? 'Chọn nguồn thu nhập'
-                            : 'Chọn danh mục',
-                      ),
-                      items: categories.map((category) {
-                        return DropdownMenuItem(
-                          value: category.id,
-                          child: Text(category.name),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setState(() {
-                          _selectedCategoryId = value;
-                          _selectedSubCategoryId = null; // Reset sub category
-                        });
-                      },
-                      // FIX: Category không bắt buộc cho income
-                      validator: _selectedType == TransactionType.expense
-                          ? (value) {
-                              if (value == null) {
-                                return 'Vui lòng chọn danh mục';
-                              }
-                              return null;
-                            }
-                          : null,
+                    Icon(
+                      Icons.remove_circle_outline,
+                      color: _selectedType == TransactionType.expense
+                          ? Theme.of(context).colorScheme.primary
+                          : Colors.grey,
                     ),
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton.icon(
-                        onPressed: () => _showAddCategoryDialog(),
-                        icon: const Icon(Icons.add),
-                        label: Text(
-                          'Thêm danh mục ${_selectedType == TransactionType.income ? "thu nhập" : "chi tiêu"}',
-                        ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Chi tiêu',
+                      style: TextStyle(
+                        color: _selectedType == TransactionType.expense
+                            ? Theme.of(context).colorScheme.primary
+                            : Colors.grey,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
                   ],
-                );
-              },
+                ),
+              ),
             ),
-          ],
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: GestureDetector(
+              onTap: () => setState(() {
+                _selectedType = TransactionType.income;
+                _selectedCategoryId = null;
+                _selectedSubCategoryId = null;
+              }),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: _selectedType == TransactionType.income
+                      ? Theme.of(context).colorScheme.primary.withOpacity(0.1)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: _selectedType == TransactionType.income
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.grey.shade300,
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.add_circle_outline,
+                      color: _selectedType == TransactionType.income
+                          ? Theme.of(context).colorScheme.primary
+                          : Colors.grey,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Thu nhập',
+                      style: TextStyle(
+                        color: _selectedType == TransactionType.income
+                            ? Theme.of(context).colorScheme.primary
+                            : Colors.grey,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAmountInput() {
+    return _buildCard(
+      title: 'Số tiền',
+      child: TextFormField(
+        controller: _amountController,
+        decoration: InputDecoration(
+          hintText: '0đ',
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: Colors.grey.shade300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          suffixText: '₫',
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 12,
+          ),
         ),
+        keyboardType: TextInputType.number,
+        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        validator: (value) {
+          if (value == null || value.isEmpty) {
+            return 'Vui lòng nhập số tiền';
+          }
+          final amount = double.tryParse(value);
+          if (amount == null || amount <= 0) {
+            return 'Số tiền phải lớn hơn 0';
+          }
+          return null;
+        },
+      ),
+    );
+  }
+
+  Widget _buildWalletSelector(UserProvider userProvider) {
+    return _buildCard(
+      title: 'Chọn ví',
+      child: StreamBuilder<List<Wallet>>(
+        stream: _databaseService.getSelectableWalletsStream(userProvider),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final wallets = snapshot.data!;
+          if (wallets.isEmpty) {
+            return Column(
+              children: [
+                const Text(
+                  'Chưa có ví nào',
+                  style: TextStyle(color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    // TODO: Implement navigation to add wallet screen
+                    // Navigator.push(context, MaterialPageRoute(...));
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Tạo ví mới'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+
+          // Main dropdown for wallet selection
+          return Column(
+            children: [
+              DropdownButtonFormField<String>(
+                value: _selectedWalletId,
+                isExpanded: true, // Ensures the dropdown takes full width
+                decoration: InputDecoration(
+                  prefixIcon: Icon(
+                    Icons.account_balance_wallet_outlined,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.grey.shade300),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.primary,
+                      width: 2,
+                    ),
+                  ),
+                  filled: true,
+                  fillColor: Theme.of(
+                    context,
+                  ).colorScheme.primary.withOpacity(0.05),
+                  hintText: 'Chọn ví',
+                ),
+                items: wallets.map((wallet) {
+                  // Customize display for each wallet type
+                  String displayName = wallet.name;
+                  IconData icon;
+                  Widget? trailing;
+
+                  if (wallet.ownerId == userProvider.partnershipId) {
+                    displayName += ' (Chung)';
+                    icon = Icons.people_outline;
+                    trailing = const Icon(Icons.group, size: 16);
+                  } else if (wallet.ownerId ==
+                      FirebaseAuth.instance.currentUser?.uid) {
+                    displayName += ' (Cá nhân)';
+                    icon = Icons.person_outline;
+                    trailing = const Icon(Icons.person, size: 16);
+                  } else {
+                    icon = Icons.account_balance_wallet_outlined;
+                  }
+
+                  return DropdownMenuItem<String>(
+                    value: wallet.id,
+                    child: Row(
+                      children: [
+                        Icon(
+                          icon,
+                          size: 20,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            displayName,
+                            style: const TextStyle(fontSize: 16),
+                          ),
+                        ),
+                        if (trailing != null) trailing,
+                      ],
+                    ),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  setState(() => _selectedWalletId = value);
+                },
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Vui lòng chọn ví';
+                  }
+                  return null;
+                },
+                icon: Icon(
+                  Icons.arrow_drop_down,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Add wallet button
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () {
+                    // TODO: Implement navigation to add wallet screen
+                    // Navigator.push(context, MaterialPageRoute(...));
+                  },
+                  icon: Icon(
+                    Icons.add,
+                    size: 20,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  label: Text(
+                    'Thêm ví mới',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // FIX: Category selector riêng biệt cho income và expense
+  Widget _buildCategorySelector() {
+    return _buildCard(
+      title: _selectedType == TransactionType.income
+          ? 'Nguồn thu nhập'
+          : 'Danh mục chi tiêu',
+      child: StreamBuilder<List<Category>>(
+        stream: _databaseService.getCategoriesByTypeStream(
+          _selectedType == TransactionType.income ? 'income' : 'expense',
+        ),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const CircularProgressIndicator();
+          }
+
+          final categories = snapshot.data!;
+
+          // Nếu là income mà không có category nào
+          if (_selectedType == TransactionType.income && categories.isEmpty) {
+            return Column(
+              children: [
+                const Text(
+                  'Chưa có danh mục thu nhập. Hãy tạo danh mục trước!',
+                  style: TextStyle(color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                ElevatedButton(
+                  onPressed: () => _showAddCategoryDialog(),
+                  child: const Text('Tạo danh mục thu nhập'),
+                ),
+              ],
+            );
+          }
+
+          return Column(
+            children: [
+              DropdownButtonFormField<String>(
+                value: _selectedCategoryId,
+                decoration: const InputDecoration(border: OutlineInputBorder()),
+                hint: Text(
+                  _selectedType == TransactionType.income
+                      ? 'Chọn nguồn thu nhập'
+                      : 'Chọn danh mục',
+                ),
+                items: categories.map((category) {
+                  return DropdownMenuItem(
+                    value: category.id,
+                    child: Text(category.name),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedCategoryId = value;
+                    _selectedSubCategoryId = null; // Reset sub category
+                  });
+                },
+                // FIX: Category không bắt buộc cho income
+                validator: _selectedType == TransactionType.expense
+                    ? (value) {
+                        if (value == null) {
+                          return 'Vui lòng chọn danh mục';
+                        }
+                        return null;
+                      }
+                    : null,
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => _showAddCategoryDialog(),
+                  icon: const Icon(Icons.add),
+                  label: Text(
+                    'Thêm danh mục ${_selectedType == TransactionType.income ? "thu nhập" : "chi tiêu"}',
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
   Widget _buildSubCategorySelector() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Danh mục con (tùy chọn)',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            StreamBuilder<List<Category>>(
-              stream: _databaseService.getCategoriesStream(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const CircularProgressIndicator();
-                }
+    return _buildCard(
+      title: 'Danh mục con (tùy chọn)',
+      child: StreamBuilder<List<Category>>(
+        stream: _databaseService.getCategoriesStream(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const CircularProgressIndicator();
+          }
 
-                final categories = snapshot.data!;
-                final selectedCategory = categories.firstWhere(
-                  (cat) => cat.id == _selectedCategoryId,
-                  orElse: () => const Category(
-                    id: '',
-                    name: '',
-                    ownerId: '',
-                    type: 'expense',
-                  ),
-                );
+          final categories = snapshot.data!;
+          final selectedCategory = categories.firstWhere(
+            (cat) => cat.id == _selectedCategoryId,
+            orElse: () =>
+                const Category(id: '', name: '', ownerId: '', type: 'expense'),
+          );
 
-                if (selectedCategory.subCategories.isEmpty) {
-                  return Column(
-                    children: [
-                      const Text(
-                        'Chưa có danh mục con',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                      TextButton.icon(
-                        onPressed: () =>
-                            _showAddSubCategoryDialog(selectedCategory.id),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Thêm danh mục con'),
-                      ),
-                    ],
+          if (selectedCategory.subCategories.isEmpty) {
+            return Column(
+              children: [
+                const Text(
+                  'Chưa có danh mục con',
+                  style: TextStyle(color: Colors.grey),
+                ),
+                TextButton.icon(
+                  onPressed: () =>
+                      _showAddSubCategoryDialog(selectedCategory.id),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Thêm danh mục con'),
+                ),
+              ],
+            );
+          }
+
+          return Column(
+            children: [
+              DropdownButtonFormField<String>(
+                value: _selectedSubCategoryId,
+                decoration: const InputDecoration(border: OutlineInputBorder()),
+                hint: const Text('Chọn danh mục con (tùy chọn)'),
+                items: selectedCategory.subCategories.entries.map((entry) {
+                  return DropdownMenuItem(
+                    value: entry.key,
+                    child: Text(entry.value),
                   );
-                }
-
-                return Column(
-                  children: [
-                    DropdownButtonFormField<String>(
-                      value: _selectedSubCategoryId,
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                      ),
-                      hint: const Text('Chọn danh mục con (tùy chọn)'),
-                      items: selectedCategory.subCategories.entries.map((
-                        entry,
-                      ) {
-                        return DropdownMenuItem(
-                          value: entry.key,
-                          child: Text(entry.value),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setState(() {
-                          _selectedSubCategoryId = value;
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton.icon(
-                        onPressed: () =>
-                            _showAddSubCategoryDialog(selectedCategory.id),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Thêm danh mục con'),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ],
-        ),
+                }).toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedSubCategoryId = value;
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () =>
+                      _showAddSubCategoryDialog(selectedCategory.id),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Thêm danh mục con'),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
   Widget _buildDateSelector() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Ngày giao dịch',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            InkWell(
-              onTap: () async {
-                final date = await showDatePicker(
-                  context: context,
-                  initialDate: _selectedDate,
-                  firstDate: DateTime(2020),
-                  lastDate: DateTime.now().add(const Duration(days: 365)),
+    return _buildCard(
+      title: 'Thời gian',
+      child: InkWell(
+        onTap: () async {
+          final date = await showDatePicker(
+            context: context,
+            initialDate: _selectedDate,
+            firstDate: DateTime(2020),
+            lastDate: DateTime.now().add(const Duration(days: 365)),
+            builder: (context, child) {
+              return Theme(
+                data: Theme.of(context).copyWith(
+                  colorScheme: ColorScheme.light(
+                    primary: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                child: child!,
+              );
+            },
+          );
+          if (date != null) {
+            final time = await showTimePicker(
+              context: context,
+              initialTime: TimeOfDay.fromDateTime(_selectedDate),
+              builder: (context, child) {
+                return Theme(
+                  data: Theme.of(context).copyWith(
+                    colorScheme: ColorScheme.light(
+                      primary: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  child: child!,
                 );
-                if (date != null) {
-                  final time = await showTimePicker(
-                    context: context,
-                    initialTime: TimeOfDay.fromDateTime(_selectedDate),
-                  );
-                  setState(() {
-                    _selectedDate = DateTime(
-                      date.year,
-                      date.month,
-                      date.day,
-                      time?.hour ?? _selectedDate.hour,
-                      time?.minute ?? _selectedDate.minute,
-                    );
-                  });
-                }
               },
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.calendar_today),
-                    const SizedBox(width: 8),
-                    Text(DateFormat('dd/MM/yyyy, HH:mm').format(_selectedDate)),
-                  ],
-                ),
+            );
+            setState(() {
+              _selectedDate = DateTime(
+                date.year,
+                date.month,
+                date.day,
+                time?.hour ?? _selectedDate.hour,
+                time?.minute ?? _selectedDate.minute,
+              );
+            });
+          }
+        },
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade300),
+            color: Theme.of(context).colorScheme.primary.withOpacity(0.05),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.event_outlined,
+                color: Theme.of(context).colorScheme.primary,
               ),
-            ),
-          ],
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    DateFormat('dd/MM/yyyy').format(_selectedDate),
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    DateFormat('HH:mm').format(_selectedDate),
+                    style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

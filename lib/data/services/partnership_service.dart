@@ -109,7 +109,7 @@ class PartnershipService {
     await inviteRef.remove();
 
     final notificationRef = _dbRef
-        .child('notifications')
+        .child('user_notifications')
         .child(partnerUid)
         .push();
     await notificationRef.set({
