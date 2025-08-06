@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
+import 'package:moneysun/data/services/database_service.dart';
 import 'package:provider/provider.dart';
 
 class NotificationListener extends StatefulWidget {
@@ -19,6 +20,7 @@ class _NotificationListenerState extends State<NotificationListener> {
   StreamSubscription? _notificationSubscription;
   final _dbRef = FirebaseDatabase.instance.ref();
   final _auth = FirebaseAuth.instance;
+  final _databaseService = DatabaseService();
 
   @override
   void initState() {
@@ -26,9 +28,44 @@ class _NotificationListenerState extends State<NotificationListener> {
     _auth.authStateChanges().listen((user) {
       _notificationSubscription?.cancel(); // Hủy lắng nghe cũ
       if (user != null) {
-        _listenForNotifications(user.uid);
+        _setupNotificationListener(user.uid);
+        _syncPartnershipOnStartup(user.uid);
       }
     });
+  }
+
+  void _setupNotificationListener(String uid) {
+    final userRef = _dbRef.child('users').child(uid);
+
+    _notificationSubscription = userRef.onChildChanged.listen((event) {
+      if (event.snapshot.key == 'partnershipId' ||
+          event.snapshot.key == 'partnerUid') {
+        _handlePartnershipUpdate();
+      }
+    });
+  }
+
+  void _syncPartnershipOnStartup(String uid) async {
+    final partnershipId = await _databaseService.getPartnershipId(uid);
+    if (partnershipId != null) {
+      // Lắng nghe thông báo cho partnership
+      _listenForNotifications(partnershipId);
+    } else {
+      // Nếu không có partnership, lắng nghe thông báo cá nhân
+      _listenForNotifications(uid);
+    }
+  }
+
+  void _handlePartnershipUpdate() {
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+    userProvider.refreshUser();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Thông tin kết nối đã được cập nhật'),
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   void _listenForNotifications(String uid) {
@@ -48,7 +85,7 @@ class _NotificationListenerState extends State<NotificationListener> {
                 event.snapshot.key == 'partnershipId') {
               // Refresh user provider để cập nhật partnership state
               if (mounted) {
-                context.read<UserProvider>().fetchUser();
+                context.read<UserProvider>().fetchUser(uid);
               }
               return;
             }

@@ -10,10 +10,45 @@ import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:async/async.dart';
 import 'package:collection/collection.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 class DatabaseService {
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
   final String? _uid = FirebaseAuth.instance.currentUser?.uid;
+
+  static Future<void> enableOfflineSupport() async {
+    FirebaseDatabase.instance.setPersistenceEnabled(true);
+    FirebaseDatabase.instance.setPersistenceCacheSizeBytes(
+      10000000,
+    ); // 10MB cache
+  }
+
+  // FIX: Check connectivity and sync when online
+  Future<void> syncWhenOnline() async {
+    final connectivity = Connectivity();
+    connectivity.onConnectivityChanged.listen(
+      (ConnectivityResult result) {
+            if (result != ConnectivityResult.none) {
+              _performSync();
+            }
+          }
+          as void Function(List<ConnectivityResult> event)?,
+    );
+  }
+
+  Future<void> _performSync() async {
+    try {
+      // Force sync with server when coming back online
+      await _dbRef
+          .child('users')
+          .child(_uid!)
+          .child('lastSync')
+          .set(ServerValue.timestamp);
+      print('Sync completed successfully');
+    } catch (e) {
+      print('Sync failed: $e');
+    }
+  }
 
   // FIX: Wallet selection cho AddTransaction - chỉ cho phép chọn ví của mình và ví chung
   Stream<List<Wallet>> getSelectableWalletsStream(UserProvider userProvider) {
@@ -823,68 +858,204 @@ class DatabaseService {
     });
   }
 
-  Future<void> syncPartnership(String partnershipId) async {
+  Future<String?> getPartnershipId(String uid) async {
+    final ref = FirebaseDatabase.instance
+        .ref()
+        .child('users')
+        .child(uid)
+        .child('partnershipId');
+    final snapshot = await ref.get();
+    if (snapshot.exists) {
+      return snapshot.value as String?;
+    }
+    return null;
+  }
+
+  Future<void> leavePartnership(String partnershipId) async {
     if (_uid == null) return;
 
     final partnershipRef = _dbRef.child('partnerships').child(partnershipId);
     final userRef = _dbRef.child('users').child(_uid!);
 
-    await partnershipRef.update({
-      'lastSyncTime': ServerValue.timestamp,
-      'isActive': true,
+    // Xóa thông tin partnership khỏi user
+    await userRef.update({
+      'partnershipId': null,
+      'partnerUid': null,
+      'partnerDisplayName': null,
+      'partnershipCreatedAt': null,
     });
 
-    // Cập nhật thông tin user
-    await userRef.update({
-      'partnershipId': partnershipId,
-      'lastSync': ServerValue.timestamp,
-    });
+    // Xóa partnership nếu không còn thành viên nào
+    final partnershipSnapshot = await partnershipRef.get();
+    if (partnershipSnapshot.exists) {
+      final members = (partnershipSnapshot.value as Map)['memberIds'] as List;
+      if (members.length <= 1) {
+        await partnershipRef.remove();
+      } else {
+        // Cập nhật danh sách thành viên
+        members.remove(_uid);
+        await partnershipRef.update({'memberIds': members});
+      }
+    }
   }
 
   Future<void> handlePartnershipInvite(String inviteCode) async {
+    if (_uid == null) throw Exception('User not authenticated');
+
+    try {
+      final inviteSnapshot = await _dbRef
+          .child('inviteCodes')
+          .child(inviteCode.toUpperCase())
+          .get();
+
+      if (!inviteSnapshot.exists) {
+        throw Exception('Mã mời không hợp lệ hoặc đã hết hạn');
+      }
+
+      final inviteData = inviteSnapshot.value as Map<dynamic, dynamic>;
+      final partnerUid = inviteData['userId'] as String;
+
+      if (partnerUid == _uid) {
+        throw Exception('Bạn không thể mời chính mình');
+      }
+
+      // Check existing partnerships
+      final currentUserSnapshot = await _dbRef
+          .child('users')
+          .child(_uid!)
+          .get();
+      final partnerSnapshot = await _dbRef
+          .child('users')
+          .child(partnerUid)
+          .get();
+
+      if (currentUserSnapshot.exists) {
+        final userData = currentUserSnapshot.value as Map<dynamic, dynamic>;
+        if (userData['partnershipId'] != null) {
+          throw Exception('Bạn đã có đối tác');
+        }
+      }
+
+      if (partnerSnapshot.exists) {
+        final partnerData = partnerSnapshot.value as Map<dynamic, dynamic>;
+        if (partnerData['partnershipId'] != null) {
+          throw Exception('Người này đã có đối tác');
+        }
+      }
+
+      // Create partnership
+      final newPartnershipRef = _dbRef.child('partnerships').push();
+      final partnershipId = newPartnershipRef.key!;
+
+      final currentUserData =
+          currentUserSnapshot.value as Map<dynamic, dynamic>? ?? {};
+      final partnerData = partnerSnapshot.value as Map<dynamic, dynamic>? ?? {};
+
+      final partnership = {
+        'members': {_uid: true, partnerUid: true},
+        'memberNames': {
+          _uid: currentUserData['displayName'] ?? 'User',
+          partnerUid: partnerData['displayName'] ?? 'Partner',
+        },
+        'createdAt': ServerValue.timestamp,
+        'isActive': true,
+        'lastSyncTime': ServerValue.timestamp,
+      };
+
+      // Create partnership
+      await _dbRef.child('partnerships').child(partnershipId).set(partnership);
+
+      // Update current user
+      await _dbRef.child('users').child(_uid).update({
+        'partnershipId': partnershipId,
+        'partnerUid': partnerUid,
+        'partnerDisplayName': partnerData['displayName'],
+        'partnershipCreatedAt': ServerValue.timestamp,
+      });
+
+      // Update partner
+      await _dbRef.child('users').child(partnerUid).update({
+        'partnershipId': partnershipId,
+        'partnerUid': _uid,
+        'partnerDisplayName': currentUserData['displayName'],
+        'partnershipCreatedAt': ServerValue.timestamp,
+      });
+
+      // Send notifications
+      await Future.wait([
+        _sendNotification(
+          _uid!,
+          'Kết nối thành công!',
+          'Bạn đã kết nối với ${partnerData['displayName'] ?? 'đối tác'}',
+        ),
+        _sendNotification(
+          partnerUid,
+          'Có người kết nối!',
+          '${currentUserData['displayName'] ?? 'Ai đó'} đã chấp nhận lời mời',
+        ),
+      ]);
+
+      // Clean up invite code
+      await _dbRef
+          .child('inviteCodes')
+          .child(inviteCode.toUpperCase())
+          .remove();
+    } catch (e) {
+      print('Error handling partnership invite: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> _sendNotification(
+    String userId,
+    String title,
+    String body,
+  ) async {
+    try {
+      await _dbRef.child('user_notifications').child(userId).push().set({
+        'title': title,
+        'body': body,
+        'timestamp': ServerValue.timestamp,
+        'type': 'partnership',
+        'isRead': false,
+      });
+    } catch (e) {
+      print('Error sending notification: $e');
+    }
+  }
+
+  // FIX: Sync partnership on app startup
+  Future<void> syncPartnership(String partnershipId) async {
     if (_uid == null) return;
 
-    final snapshot = await _dbRef
-        .child('users')
-        .orderByChild('inviteCode')
-        .equalTo(inviteCode)
-        .get();
+    try {
+      final partnershipRef = _dbRef.child('partnerships').child(partnershipId);
 
-    if (snapshot.exists) {
-      final partnerData = (snapshot.value as Map).entries.first;
-      final partnerUid = partnerData.key;
-      final partnerInfo = partnerData.value as Map;
+      // Check if partnership exists
+      final partnershipSnapshot = await partnershipRef.get();
+      if (!partnershipSnapshot.exists) {
+        // Clean up invalid partnership
+        await _dbRef.child('users').child(_uid!).update({
+          'partnershipId': null,
+          'partnerUid': null,
+          'partnerDisplayName': null,
+          'partnershipCreatedAt': null,
+        });
+        throw Exception('Partnership không tồn tại');
+      }
 
-      // Tạo partnership mới
-      final newPartnershipRef = _dbRef.child('partnerships').push();
-      final partnership = Partnership(
-        id: newPartnershipRef.key!,
-        memberIds: [_uid!, partnerUid],
-        createdAt: DateTime.now(),
-        memberNames: {
-          _uid: FirebaseAuth.instance.currentUser!.displayName ?? '',
-          partnerUid: partnerInfo['displayName'] ?? '',
-        },
-      );
+      // Update sync time
+      await partnershipRef.update({
+        'lastSyncTime': ServerValue.timestamp,
+        'isActive': true,
+      });
 
-      // Cập nhật partnership
-      await newPartnershipRef.set(partnership.toJson());
-
-      // Cập nhật thông tin cho cả 2 user
-      await Future.wait([
-        _dbRef.child('users').child(_uid!).update({
-          'partnerUid': partnerUid,
-          'partnershipId': partnership.id,
-          'partnerDisplayName': partnerInfo['displayName'],
-          'partnershipCreatedAt': ServerValue.timestamp,
-        }),
-        _dbRef.child('users').child(partnerUid).update({
-          'partnerUid': _uid,
-          'partnershipId': partnership.id,
-          'partnerDisplayName': FirebaseAuth.instance.currentUser!.displayName,
-          'partnershipCreatedAt': ServerValue.timestamp,
-        }),
-      ]);
+      await _dbRef.child('users').child(_uid!).update({
+        'lastSync': ServerValue.timestamp,
+      });
+    } catch (e) {
+      print('Error syncing partnership: $e');
+      rethrow;
     }
   }
 }

@@ -4,6 +4,7 @@ import 'package:moneysun/data/models/report_data_model.dart';
 import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/services/database_service.dart';
+import 'package:moneysun/presentation/screens/category_detail_report_screen.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 
@@ -66,7 +67,7 @@ class _ReportingScreenState extends State<ReportingScreen>
         ),
         actions: [
           PopupMenuButton<TimeFilter>(
-            icon: const Icon(Icons.filter_list),
+            icon: const Icon(Icons.date_range_rounded),
             onSelected: (filter) {
               setState(() {
                 _selectedTimeFilter = filter;
@@ -161,7 +162,24 @@ class IncomeReportPage extends StatelessWidget {
 
         if (!snapshot.hasData || snapshot.data!.incomeByCategory.isEmpty) {
           return const Center(
-            child: Text('Không có dữ liệu thu nhập trong khoảng thời gian này'),
+            child: Padding(
+              padding: EdgeInsets.all(32.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.trending_up, size: 80, color: Colors.grey),
+                  SizedBox(height: 16),
+                  Text(
+                    'Không có dữ liệu thu nhập',
+                    style: TextStyle(fontSize: 18, color: Colors.grey),
+                  ),
+                  Text(
+                    'trong khoảng thời gian này',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
           );
         }
 
@@ -169,34 +187,101 @@ class IncomeReportPage extends StatelessWidget {
         final incomeCategories = report.incomeByCategory.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value)); // Sắp xếp giảm dần
 
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            children: [
-              // Header với tổng thu nhập
-              _buildHeaderCard(
-                'Thu nhập',
-                report.totalIncome,
-                Colors.green,
-                currencyFormatter,
-              ),
-              const SizedBox(height: 16),
+        return RefreshIndicator(
+          onRefresh: () async {
+            // Cập nhật lại dữ liệu khi kéo để làm mới
+            await Future.delayed(const Duration(microseconds: 500));
+          },
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              children: [
+                // Header với tổng thu nhập
+                _buildHeaderCard(
+                  'Thu nhập',
+                  report.totalIncome,
+                  Colors.green,
+                  currencyFormatter,
+                ),
+                const SizedBox(height: 16),
 
-              // FIX: Pie Chart với legend
-              _buildIncomeChart(incomeCategories),
-              const SizedBox(height: 16),
+                // FIX: Pie Chart với legend
+                _buildIncomeChart(incomeCategories),
+                const SizedBox(height: 16),
 
-              // FIX: Danh sách categories có thể click
-              _buildCategoryList(
-                incomeCategories,
-                currencyFormatter,
-                report.totalIncome,
-                context,
-              ),
-            ],
+                // FIX: Danh sách categories có thể click
+                _buildCategoryList(
+                  incomeCategories,
+                  currencyFormatter,
+                  report.totalIncome,
+                  context,
+                ),
+              ],
+            ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildCategoryList(
+    List<MapEntry<Category, double>> categories,
+    NumberFormat formatter,
+    double totalAmount,
+    BuildContext context,
+  ) {
+    return Card(
+      child: Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text(
+              'Chi tiết theo danh mục',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+          ),
+          ...categories.map((entry) {
+            final category = entry.key;
+            final amount = entry.value;
+            final percentage = (amount / totalAmount * 100);
+
+            return ListTile(
+              leading: CircleAvatar(
+                backgroundColor: _getCategoryColor(
+                  categories.indexOf(entry),
+                ).withOpacity(0.2),
+                child: Icon(
+                  Icons.trending_up,
+                  color: _getCategoryColor(categories.indexOf(entry)),
+                ),
+              ),
+              title: Text(category.name),
+              subtitle: Text('${percentage.toStringAsFixed(1)}%'),
+              trailing: Text(
+                formatter.format(amount),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green,
+                ),
+              ),
+              onTap: () {
+                // FIX: Navigate to CategoryDetailReportScreen
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => CategoryDetailReportScreen(
+                      categoryId: category.id,
+                      categoryName: category.name,
+                      initialStartDate: startDate,
+                      initialEndDate: endDate,
+                    ),
+                  ),
+                );
+              },
+            );
+          }).toList(),
+        ],
+      ),
     );
   }
 
@@ -292,67 +377,6 @@ class IncomeReportPage extends StatelessWidget {
           ),
         );
       }).toList(),
-    );
-  }
-
-  Widget _buildCategoryList(
-    List<MapEntry<Category, double>> categories,
-    NumberFormat formatter,
-    double totalAmount,
-    BuildContext context,
-  ) {
-    return Card(
-      child: Column(
-        children: [
-          const Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Text(
-              'Chi tiết theo danh mục',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-          ),
-          ...categories.map((entry) {
-            final category = entry.key;
-            final amount = entry.value;
-            final percentage = (amount / totalAmount * 100);
-
-            return ListTile(
-              leading: CircleAvatar(
-                backgroundColor: _getCategoryColor(
-                  categories.indexOf(entry),
-                ).withOpacity(0.2),
-                child: Icon(
-                  Icons.trending_up,
-                  color: _getCategoryColor(categories.indexOf(entry)),
-                ),
-              ),
-              title: Text(category.name),
-              subtitle: Text('${percentage.toStringAsFixed(1)}%'),
-              trailing: Text(
-                formatter.format(amount),
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green,
-                ),
-              ),
-              onTap: () {
-                // FIX: Navigate to category detail
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => CategoryDetailScreen(
-                      category: category,
-                      startDate: startDate,
-                      endDate: endDate,
-                      isIncome: true,
-                    ),
-                  ),
-                );
-              },
-            );
-          }).toList(),
-        ],
-      ),
     );
   }
 
@@ -505,26 +529,6 @@ class ExpenseReportPage extends StatelessWidget {
     );
   }
 
-  Widget _buildChartLegend(List<MapEntry<Category, double>> categories) {
-    return Wrap(
-      children: categories.map((entry) {
-        final index = categories.indexOf(entry);
-        final color = _getCategoryColor(index);
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(width: 12, height: 12, color: color),
-              const SizedBox(width: 4),
-              Text(entry.key.name, style: const TextStyle(fontSize: 12)),
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
-
   Widget _buildCategoryList(
     List<MapEntry<Category, double>> categories,
     NumberFormat formatter,
@@ -552,7 +556,7 @@ class ExpenseReportPage extends StatelessWidget {
                   categories.indexOf(entry),
                 ).withOpacity(0.2),
                 child: Icon(
-                  Icons.trending_down,
+                  Icons.trending_up,
                   color: _getCategoryColor(categories.indexOf(entry)),
                 ),
               ),
@@ -562,18 +566,19 @@ class ExpenseReportPage extends StatelessWidget {
                 formatter.format(amount),
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
-                  color: Colors.red,
+                  color: Colors.green,
                 ),
               ),
               onTap: () {
+                // FIX: Navigate to CategoryDetailReportScreen
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => CategoryDetailScreen(
-                      category: category,
-                      startDate: startDate,
-                      endDate: endDate,
-                      isIncome: false,
+                    builder: (_) => CategoryDetailReportScreen(
+                      categoryId: category.id,
+                      categoryName: category.name,
+                      initialStartDate: startDate,
+                      initialEndDate: endDate,
                     ),
                   ),
                 );
@@ -582,6 +587,26 @@ class ExpenseReportPage extends StatelessWidget {
           }).toList(),
         ],
       ),
+    );
+  }
+
+  Widget _buildChartLegend(List<MapEntry<Category, double>> categories) {
+    return Wrap(
+      children: categories.map((entry) {
+        final index = categories.indexOf(entry);
+        final color = _getCategoryColor(index);
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 12, height: 12, color: color),
+              const SizedBox(width: 4),
+              Text(entry.key.name, style: const TextStyle(fontSize: 12)),
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 

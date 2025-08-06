@@ -885,6 +885,71 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     }
   }
 
+  Future<void> _saveTransaction() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    try {
+      // Show loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
+
+      final transaction = TransactionModel(
+        id: widget.transactionToEdit?.id ?? '',
+        amount: double.parse(_amountController.text),
+        type: _selectedType,
+        categoryId: _selectedCategoryId,
+        subCategoryId: _selectedSubCategoryId,
+        walletId: _selectedWalletId!,
+        date: _selectedDate,
+        description: _descriptionController.text,
+        userId: FirebaseAuth.instance.currentUser!.uid,
+      );
+
+      if (widget.transactionToEdit != null) {
+        // Update existing transaction
+        await _databaseService.updateTransaction(
+          transaction,
+          widget.transactionToEdit!,
+        );
+      } else {
+        // Add new transaction
+        await _databaseService.addTransaction(transaction);
+      }
+
+      // Hide loading
+      Navigator.of(context).pop();
+
+      // FIX: Navigate back with reload signal
+      Navigator.of(context).pop(true); // Return true to signal reload needed
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.transactionToEdit != null
+                ? 'Đã cập nhật giao dịch'
+                : 'Đã thêm giao dịch mới',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      // Hide loading
+      Navigator.of(context).pop();
+
+      // Show error
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Lỗi: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _amountController.dispose();

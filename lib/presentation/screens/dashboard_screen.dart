@@ -9,11 +9,11 @@ import 'package:moneysun/presentation/screens/add_transaction_screen.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/presentation/screens/all_transactions_screen.dart';
 import 'package:moneysun/presentation/screens/transfer_screen.dart';
-import 'package:moneysun/presentation/widgets/transaction_list_item.dart';
 import 'package:moneysun/presentation/widgets/monthly_summary_card.dart';
 import 'package:provider/provider.dart';
 import 'package:collection/collection.dart'; // Thêm package collection
 import 'package:moneysun/presentation/widgets/daily_transactions_group.dart';
+import 'package:moneysun/presentation/widgets/time_filter_widget.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -25,6 +25,54 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   final DatabaseService _databaseService = DatabaseService();
   final AuthService _authService = AuthService();
+
+  Key _refreshKey = UniqueKey();
+
+  // Add time filter state
+  TimeFilter _selectedTimeFilter = TimeFilter.thisMonth;
+  late DateTime _startDate;
+  late DateTime _endDate;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateDateRange();
+  }
+
+  Future<void> _navigateToAddTransaction() async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (context) => const AddTransactionScreen()),
+    );
+
+    // FIX: Reload data if transaction was added
+    if (result == true) {
+      setState(() {
+        _refreshKey = UniqueKey(); // Force rebuild
+      });
+    }
+  }
+
+  void _updateDateRange() {
+    final now = DateTime.now();
+    switch (_selectedTimeFilter) {
+      case TimeFilter.thisWeek:
+        _startDate = now.subtract(Duration(days: now.weekday - 1));
+        _endDate = _startDate.add(const Duration(days: 6));
+        break;
+      case TimeFilter.thisMonth:
+        _startDate = DateTime(now.year, now.month, 1);
+        _endDate = DateTime(now.year, now.month + 1, 0);
+        break;
+      case TimeFilter.thisYear:
+        _startDate = DateTime(now.year, 1, 1);
+        _endDate = DateTime(now.year, 12, 31);
+        break;
+      case TimeFilter.custom:
+        // Keep current dates
+        break;
+    }
+  }
 
   // Hàm để hiển thị dialog thêm ví
   void _showAddWalletDialog() {
@@ -147,58 +195,72 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const MonthlySummaryCard(),
-            const SizedBox(height: 24),
+      body: RefreshIndicator(
+        onRefresh: () async {
+          // Cập nhật lại dữ liệu khi kéo để làm mới
+          setState(() {
+            _refreshKey = UniqueKey(); // Force rebuild
+          });
+        },
+        child: SingleChildScrollView(
+          key: _refreshKey,
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const MonthlySummaryCard(),
+              const SizedBox(height: 24),
 
-            // Phần hiển thị danh sách các ví
-            Text(
-              'Các ví của bạn',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
-            _buildWalletsList(currencyFormatter),
-            const SizedBox(height: 24),
+              TimeFilterWidget(
+                selectedFilter: _selectedTimeFilter,
+                startDate: _startDate,
+                endDate: _endDate,
+                onFilterChanged: (filter, start, end) {
+                  setState(() {
+                    _selectedTimeFilter = filter;
+                    _startDate = start;
+                    _endDate = end;
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Các ví của bạn',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              _buildWalletsList(currencyFormatter),
+              const SizedBox(height: 24),
 
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Giao dịch gần đây',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const AllTransactionsScreen(),
-                      ),
-                    );
-                  },
-                  child: const Text('Xem tất cả'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            _buildRecentTransactions(currencyFormatter),
-          ],
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Giao dịch gần đây',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const AllTransactionsScreen(),
+                        ),
+                      );
+                    },
+                    child: const Text('Xem tất cả'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _buildFilteredTransactions(currencyFormatter),
+            ],
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // Điều hướng đến màn hình thêm giao dịch
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const AddTransactionScreen(),
-            ),
-          );
-        },
+        onPressed:
+            _navigateToAddTransaction, // FIX: Use method with reload handling
         tooltip: 'Thêm giao dịch',
         child: const Icon(Icons.add),
       ),
@@ -336,6 +398,61 @@ class _DashboardScreenState extends State<DashboardScreen> {
               transactions: entry.value,
             );
           }).toList(),
+        );
+      },
+    );
+  }
+
+  Widget _buildFilteredTransactions(NumberFormat currencyFormatter) {
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+
+    return StreamBuilder<List<TransactionModel>>(
+      stream: _databaseService.getTransactionsStream(
+        userProvider,
+        _startDate,
+        _endDate,
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(32.0),
+              child: Column(
+                children: [
+                  Icon(Icons.receipt_long, size: 64, color: Colors.grey),
+                  SizedBox(height: 16),
+                  Text(
+                    'Chưa có giao dịch nào trong khoảng thời gian này',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        final transactions = snapshot.data!;
+
+        // FIX: Group by date and use DailyTransactionsGroup template
+        final groupedTransactions = groupBy(transactions, (TransactionModel t) {
+          return DateTime(t.date.year, t.date.month, t.date.day);
+        });
+
+        return Column(
+          children: groupedTransactions.entries
+              .take(7) // Show only last 7 days on dashboard
+              .map((entry) {
+                return DailyTransactionsGroup(
+                  date: entry.key,
+                  transactions: entry.value,
+                );
+              })
+              .toList(),
         );
       },
     );
