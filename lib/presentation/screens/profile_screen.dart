@@ -405,6 +405,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _codeController.addListener(() {
+      setState(() {}); // Force rebuild when text changes
+    });
+  }
+
+  @override
   void dispose() {
     _codeController.dispose();
     super.dispose();

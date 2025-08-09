@@ -7,6 +7,41 @@ class AppTheme {
   static const Color _textColor = Color(0xFF333333);
   static const Color _primaryColorDark = Color(0xFF63B497);
 
+  static const TextStyle _titleLarge = TextStyle(
+    fontSize: 24,
+    fontWeight: FontWeight.bold,
+    color: _textColor,
+    letterSpacing: 0.15,
+  );
+
+  static const TextStyle _titleMedium = TextStyle(
+    fontSize: 15,
+    fontWeight: FontWeight.w600,
+    color: _textColor,
+    letterSpacing: 0.15,
+  );
+
+  static const TextStyle _titleSmall = TextStyle(
+    fontSize: 13,
+    fontWeight: FontWeight.w600,
+    color: _textColor,
+    letterSpacing: 0.1,
+  );
+
+  static const TextStyle _bodyLarge = TextStyle(
+    fontSize: 14,
+    fontWeight: FontWeight.normal,
+    color: _textColor,
+    letterSpacing: 0.5,
+  );
+
+  static const TextStyle _bodyMedium = TextStyle(
+    fontSize: 12,
+    fontWeight: FontWeight.normal,
+    color: _textColor,
+    letterSpacing: 0.25,
+  );
+
   static final ThemeData lightTheme = ThemeData(
     primaryColor: _primaryColor,
     scaffoldBackgroundColor: _scaffoldBackgroundColor,
@@ -48,6 +83,43 @@ class AppTheme {
     floatingActionButtonTheme: const FloatingActionButtonThemeData(
       backgroundColor: _primaryColorDark, // Áp dụng cho cả FAB
       foregroundColor: Colors.white,
+    ),
+
+    textTheme: const TextTheme(
+      // Titles
+      titleLarge: _titleLarge, // Use for main headers
+      titleMedium: _titleMedium, // Use for section headers
+      titleSmall: _titleSmall, // Use for card titles
+      // Body text
+      bodyLarge: _bodyLarge, // Use for important content
+      bodyMedium: _bodyMedium, // Use for regular content
+      // Amount display
+      displayLarge: TextStyle(
+        // Use for large amounts
+        fontSize: 32,
+        fontWeight: FontWeight.bold,
+        color: _textColor,
+      ),
+      displayMedium: TextStyle(
+        // Use for medium amounts
+        fontSize: 24,
+        fontWeight: FontWeight.w600,
+        color: _textColor,
+      ),
+
+      // Labels
+      labelLarge: TextStyle(
+        // Use for button text
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.1,
+      ),
+      labelMedium: TextStyle(
+        // Use for input labels
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+        letterSpacing: 0.5,
+      ),
     ),
   );
 }

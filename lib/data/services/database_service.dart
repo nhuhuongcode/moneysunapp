@@ -505,7 +505,6 @@ class DatabaseService {
             .equalTo(userProvider.partnerUid)
             .get();
       }
-
       final allTransactions = <TransactionModel>[];
 
       if (currentUserTransactionsSnapshot.exists) {
@@ -552,7 +551,60 @@ class DatabaseService {
       }).toList();
 
       filteredTransactions.sort((a, b) => b.date.compareTo(a.date));
-      return filteredTransactions;
+      // Enrich transactions with walletName, categoryName, subCategoryName, transferFromWalletName, transferToWalletName
+      final walletsMap = {for (var w in visibleWallets) w.id: w};
+      final categories = await getCategoriesStream().first;
+      final categoriesMap = {for (var c in categories) c.id: c};
+
+      return filteredTransactions.map((trans) {
+        final wallet =
+            walletsMap[trans.walletId] ??
+            Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: '');
+        String categoryName = 'Không có';
+        String subCategoryName = '';
+
+        if (trans.categoryId != null) {
+          final category =
+              categoriesMap[trans.categoryId] ??
+              Category(
+                id: '',
+                name: 'Danh mục đã xóa',
+                ownerId: '',
+                type: 'expense',
+              );
+          categoryName = category.name;
+
+          if (trans.subCategoryId != null &&
+              category.subCategories.containsKey(trans.subCategoryId)) {
+            subCategoryName = category.subCategories[trans.subCategoryId]!;
+          }
+        }
+
+        String transferFromWalletName = '';
+        String transferToWalletName = '';
+
+        if (trans.type == TransactionType.transfer &&
+            trans.transferToWalletId != null) {
+          final targetWallet =
+              walletsMap[trans.transferToWalletId] ??
+              Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: '');
+          if (trans.description.contains('Chuyển đến:')) {
+            transferFromWalletName = wallet.name;
+            transferToWalletName = targetWallet.name;
+          } else {
+            transferFromWalletName = targetWallet.name;
+            transferToWalletName = wallet.name;
+          }
+        }
+
+        return trans.copyWith(
+          walletName: wallet.name,
+          categoryName: categoryName,
+          subCategoryName: subCategoryName,
+          transferFromWalletName: transferFromWalletName,
+          transferToWalletName: transferToWalletName,
+        );
+      }).toList();
     });
   }
 

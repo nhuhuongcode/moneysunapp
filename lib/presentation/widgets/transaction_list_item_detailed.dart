@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/services/database_service.dart';
 import 'package:moneysun/presentation/screens/add_transaction_screen.dart';
+import 'package:moneysun/core/theme/app_theme.dart';
 
 class TransactionListItemDetailed extends StatelessWidget {
   final TransactionModel transaction;
@@ -44,20 +45,23 @@ class TransactionListItemDetailed extends StatelessWidget {
         _showTransactionDetailDialog(context, transaction);
       },
       // FIX: Thay đổi icon từ mũi tên thành category icon
-      leading: CircleAvatar(
-        backgroundColor: amountColor.withOpacity(0.1),
-        child: Icon(categoryIcon, color: amountColor),
+      // leading: CircleAvatar(
+      //   backgroundColor: amountColor.withOpacity(0.1),
+      //   child: Icon(categoryIcon, color: amountColor),
+      // ),
+      // Giới hạn chiều rộng cho nội dung ListTile để trông thẩm mỹ hơn
+      leading: Container(width: 80, child: _buildTransactionCategory()),
+      title: Container(width: 180, child: _buildTransactionTitle()),
+      subtitle: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 180),
+        child: _buildTransactionSubtitle(),
       ),
-      // FIX: Title hiển thị category name hoặc transfer format
-      title: _buildTransactionTitle(),
-      // FIX: Subtitle hiển thị subcategory, description, wallet
-      subtitle: _buildTransactionSubtitle(),
       trailing: Text(
         '${sign}${currencyFormatter.format(transaction.amount)}',
         style: TextStyle(
           color: amountColor,
-          fontWeight: FontWeight.bold,
-          fontSize: 15,
+          fontWeight: FontWeight.w500,
+          fontSize: 13,
         ),
       ),
       // Cho phép subtitle có nhiều dòng nếu cần
@@ -67,13 +71,62 @@ class TransactionListItemDetailed extends StatelessWidget {
 
   // FIX: Build title theo format yêu cầu
   Widget _buildTransactionTitle() {
+    return Text(
+      transaction.description.isNotEmpty ? transaction.description : "",
+      style: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w500,
+        color: Colors.blueGrey,
+      ),
+    );
+  }
+
+  Widget _buildTransactionCategory() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          transaction.type == TransactionType.transfer
+              ? 'Chuyển tiền'
+              : (transaction.categoryName.isNotEmpty
+                    ? transaction.categoryName
+                    : ''),
+          style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+        ),
+        // Subcategory (nếu có)
+        if (transaction.type != TransactionType.transfer &&
+            transaction.subCategoryName.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2.0),
+            child: Text(
+              transaction.subCategoryName,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+                fontWeight: FontWeight.w500,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
+    );
+  }
+
+  // FIX: Build subtitle với format mới
+  Widget _buildTransactionSubtitle() {
     if (transaction.type == TransactionType.transfer) {
       // FIX: Hiển thị "Chuyển tiền" và từ -> đến
       if (transaction.transferFromWalletName!.isNotEmpty &&
           transaction.transferToWalletName!.isNotEmpty) {
         return Text(
-          'Chuyển ${transaction.transferFromWalletName} → ${transaction.transferToWalletName}',
-          style: const TextStyle(fontWeight: FontWeight.bold),
+          '${transaction.transferFromWalletName} → ${transaction.transferToWalletName}',
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey.shade600,
+            fontWeight: FontWeight.w500,
+          ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         );
@@ -83,71 +136,20 @@ class TransactionListItemDetailed extends StatelessWidget {
         style: TextStyle(fontWeight: FontWeight.bold),
       );
     } else {
-      // Hiển thị category name
-      return Text(
-        transaction.categoryName.isNotEmpty
-            ? transaction.categoryName
-            : (transaction.type == TransactionType.income
-                  ? 'Thu nhập'
-                  : 'Chi tiêu'),
-        style: const TextStyle(fontWeight: FontWeight.bold),
-      );
-    }
-  }
-
-  // FIX: Build subtitle với format mới
-  Widget _buildTransactionSubtitle() {
-    List<String> subtitleParts = [];
-
-    // Thêm subcategory nếu có
-    if (transaction.subCategoryName.isNotEmpty) {
-      subtitleParts.add(transaction.subCategoryName);
-    }
-
-    // Thêm description nếu có
-    if (transaction.description.isNotEmpty) {
-      subtitleParts.add(transaction.description);
-    }
-
-    // Thêm wallet name
-    if (transaction.walletName.isNotEmpty) {
-      subtitleParts.add(transaction.walletName);
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Dòng đầu: SubCategory (nếu có)
-        if (transaction.subCategoryName.isNotEmpty)
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           Text(
-            transaction.subCategoryName,
+            transaction.walletName.isNotEmpty ? transaction.walletName : '',
             style: TextStyle(
-              fontSize: 13,
-              color: Colors.grey.shade700,
+              fontSize: 12,
+              color: Colors.grey.shade600,
               fontWeight: FontWeight.w500,
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
           ),
-
-        // Dòng thứ hai: Description (nếu có)
-        if (transaction.description.isNotEmpty)
-          Text(
-            transaction.description,
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-
-        // Dòng cuối: Wallet name
-        Text(
-          transaction.walletName.isNotEmpty
-              ? transaction.walletName
-              : 'Ví đã xóa',
-          style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
-        ),
-      ],
-    );
+        ],
+      );
+    }
   }
 
   // Xác định có cần 3 dòng không

@@ -20,10 +20,19 @@ class DailyTransactionsGroup extends StatelessWidget {
       symbol: '₫',
     );
     // Tính tổng chi tiêu cho ngày này
-    final dailyTotal = transactions.fold(0.0, (sum, item) {
-      return item.type == TransactionType.expense
-          ? sum + item.amount
-          : sum - item.amount;
+    final dailyTotalexpense = transactions.fold(0.0, (sum, item) {
+      if (item.type == TransactionType.expense) {
+        return sum + item.amount;
+      }
+      return sum;
+    });
+
+    // Tính tổng thu nhập cho ngày này
+    final dailyTotalincome = transactions.fold(0.0, (sum, item) {
+      if (item.type == TransactionType.income) {
+        return sum + item.amount;
+      }
+      return sum;
     });
 
     return Card(
@@ -52,8 +61,18 @@ class DailyTransactionsGroup extends StatelessWidget {
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 Text(
-                  currencyFormatter.format(dailyTotal),
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  currencyFormatter.format(dailyTotalincome),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green,
+                  ),
+                ),
+                Text(
+                  currencyFormatter.format(dailyTotalexpense),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.red,
+                  ),
                 ),
               ],
             ),
