@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 class AppTheme {
+  //0xFFA8E6CF, fromRGBO(168, 230, 207, 1)
   // Định nghĩa màu chủ đạo - Xanh mint pastel
-  static const Color _primaryColor = Color(0xFFA8E6CF);
+  static const Color _primaryColor = Color.fromARGB(255, 117, 203, 172);
   static const Color _scaffoldBackgroundColor = Color(0xFFF0FDF4);
   static const Color _textColor = Color(0xFF333333);
   static const Color _primaryColorDark = Color(0xFF63B497);

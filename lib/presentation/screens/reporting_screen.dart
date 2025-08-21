@@ -7,9 +7,7 @@ import 'package:moneysun/data/services/database_service.dart';
 import 'package:moneysun/presentation/screens/category_detail_report_screen.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
-
-// Enum để quản lý filter time
-enum TimeFilter { week, month, year, custom }
+import 'package:moneysun/presentation/widgets/time_filter_appbar_widget.dart';
 
 class ReportingScreen extends StatefulWidget {
   const ReportingScreen({super.key});
@@ -21,90 +19,46 @@ class ReportingScreen extends StatefulWidget {
 class _ReportingScreenState extends State<ReportingScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  TimeFilter _selectedTimeFilter = TimeFilter.month;
-  DateTime _startDate = DateTime.now();
-  DateTime _endDate = DateTime.now();
+  TimeFilter _selectedTimeFilter = TimeFilter.thisMonth;
+  DateTime _startDate = DateTime(DateTime.now().year, DateTime.now().month, 1);
+  DateTime _endDate = DateTime(
+    DateTime.now().year,
+    DateTime.now().month + 1,
+    0,
+  );
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _updateDateRange();
-  }
-
-  void _updateDateRange() {
-    final now = DateTime.now();
-    switch (_selectedTimeFilter) {
-      case TimeFilter.week:
-        _startDate = now.subtract(Duration(days: now.weekday - 1));
-        _endDate = _startDate.add(const Duration(days: 6));
-        break;
-      case TimeFilter.month:
-        _startDate = DateTime(now.year, now.month, 1);
-        _endDate = DateTime(now.year, now.month + 1, 0);
-        break;
-      case TimeFilter.year:
-        _startDate = DateTime(now.year, 1, 1);
-        _endDate = DateTime(now.year, 12, 31);
-        break;
-      case TimeFilter.custom:
-        // Giữ nguyên startDate và endDate hiện tại
-        break;
-    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Báo cáo'),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: 'Thu nhập', icon: Icon(Icons.trending_up)),
-            Tab(text: 'Chi tiêu', icon: Icon(Icons.trending_down)),
-          ],
-        ),
-        actions: [
-          PopupMenuButton<TimeFilter>(
-            icon: const Icon(Icons.date_range_rounded),
-            onSelected: (filter) {
-              setState(() {
-                _selectedTimeFilter = filter;
-                if (filter != TimeFilter.custom) {
-                  _updateDateRange();
-                }
-              });
-              if (filter == TimeFilter.custom) {
-                _showCustomDatePicker();
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: TimeFilter.week,
-                child: Text('Tuần này'),
-              ),
-              const PopupMenuItem(
-                value: TimeFilter.month,
-                child: Text('Tháng này'),
-              ),
-              const PopupMenuItem(
-                value: TimeFilter.year,
-                child: Text('Năm này'),
-              ),
-              const PopupMenuItem(
-                value: TimeFilter.custom,
-                child: Text('Tùy chọn...'),
-              ),
-            ],
-          ),
+      appBar: TimeFilterAppBarWithTabs(
+        title: 'Báo cáo',
+        selectedFilter: _selectedTimeFilter,
+        startDate: _startDate,
+        endDate: _endDate,
+        onFilterChanged: (filter, start, end) {
+          setState(() {
+            _selectedTimeFilter = filter;
+            _startDate = start;
+            _endDate = end;
+          });
+        },
+        tabController: _tabController,
+        tabs: [
+          Tab(text: 'Chi tiêu'),
+          Tab(text: 'Thu nhập'),
         ],
       ),
       body: TabBarView(
         controller: _tabController,
         children: [
-          IncomeReportPage(startDate: _startDate, endDate: _endDate),
           ExpenseReportPage(startDate: _startDate, endDate: _endDate),
+          IncomeReportPage(startDate: _startDate, endDate: _endDate),
         ],
       ),
     );
@@ -233,13 +187,6 @@ class IncomeReportPage extends StatelessWidget {
     return Card(
       child: Column(
         children: [
-          const Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Text(
-              'Chi tiết theo danh mục',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-          ),
           ...categories.map((entry) {
             final category = entry.key;
             final amount = entry.value;
@@ -250,13 +197,18 @@ class IncomeReportPage extends StatelessWidget {
                 backgroundColor: _getCategoryColor(
                   categories.indexOf(entry),
                 ).withOpacity(0.2),
-                child: Icon(
-                  Icons.trending_up,
-                  color: _getCategoryColor(categories.indexOf(entry)),
+                child: Text(
+                  '${percentage.toStringAsFixed(1)}%',
+                  style: TextStyle(
+                    color: _getCategoryColor(categories.indexOf(entry)),
+                    fontSize:
+                        12, // Adjust font size if needed to fit within the avatar
+                    fontWeight: FontWeight
+                        .bold, // Optional: Make it bold for better visibility
+                  ),
                 ),
               ),
               title: Text(category.name),
-              subtitle: Text('${percentage.toStringAsFixed(1)}%'),
               trailing: Text(
                 formatter.format(amount),
                 style: const TextStyle(
@@ -538,13 +490,6 @@ class ExpenseReportPage extends StatelessWidget {
     return Card(
       child: Column(
         children: [
-          const Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Text(
-              'Chi tiết theo danh mục',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-          ),
           ...categories.map((entry) {
             final category = entry.key;
             final amount = entry.value;
@@ -555,13 +500,18 @@ class ExpenseReportPage extends StatelessWidget {
                 backgroundColor: _getCategoryColor(
                   categories.indexOf(entry),
                 ).withOpacity(0.2),
-                child: Icon(
-                  Icons.trending_up,
-                  color: _getCategoryColor(categories.indexOf(entry)),
+                child: Text(
+                  '${percentage.toStringAsFixed(1)}%',
+                  style: TextStyle(
+                    color: _getCategoryColor(categories.indexOf(entry)),
+                    fontSize:
+                        12, // Adjust font size if needed to fit within the avatar
+                    fontWeight: FontWeight
+                        .bold, // Optional: Make it bold for better visibility
+                  ),
                 ),
               ),
               title: Text(category.name),
-              subtitle: Text('${percentage.toStringAsFixed(1)}%'),
               trailing: Text(
                 formatter.format(amount),
                 style: const TextStyle(

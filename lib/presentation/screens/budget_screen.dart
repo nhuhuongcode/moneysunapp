@@ -99,7 +99,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              'Ngân sách tháng $displayMonth',
+              'Ngân sách $displayMonth',
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             IconButton(

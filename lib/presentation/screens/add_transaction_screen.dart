@@ -6,6 +6,7 @@ import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/services/database_service.dart';
+import 'package:moneysun/presentation/screens/transfer_screen.dart';
 import 'package:provider/provider.dart';
 
 class AddTransactionScreen extends StatefulWidget {
@@ -78,6 +79,18 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             fontWeight: FontWeight.bold,
           ),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.swap_horiz),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const TransferScreen()),
+              );
+            },
+            tooltip: 'Chuyển tiền',
+          ),
+        ],
       ),
       body: Stack(
         children: [

@@ -280,21 +280,21 @@ class DatabaseService {
     );
 
     // Tạo giao dịch TRANSFER cho ví đích (với amount dương)
-    final toTrans = TransactionModel(
-      id: '',
-      amount: amount,
-      type: TransactionType.transfer,
-      walletId: toWalletId,
-      date: date,
-      description: 'Nhận từ: $fromWalletName',
-      userId: userId,
-      transferToWalletId: fromWalletId, // Ngược lại để trace
-    );
+    // final toTrans = TransactionModel(
+    //   id: '',
+    //   amount: amount,
+    //   type: TransactionType.transfer,
+    //   walletId: toWalletId,
+    //   date: date,
+    //   description: 'Nhận từ: $fromWalletName',
+    //   userId: userId,
+    //   transferToWalletId: fromWalletId, // Ngược lại để trace
+    // );
 
     // Lưu cả hai giao dịch
     final transRef = _dbRef.child('transactions');
     await transRef.push().set(fromTrans.toJson());
-    await transRef.push().set(toTrans.toJson());
+    // await transRef.push().set(toTrans.toJson());
 
     // Cập nhật số dư: Trừ từ ví nguồn, cộng vào ví đích
     final fromWalletRef = _dbRef.child('wallets').child(fromWalletId);

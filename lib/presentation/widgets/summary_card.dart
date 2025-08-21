@@ -4,17 +4,23 @@ import 'package:moneysun/data/models/report_data_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/services/database_service.dart';
 import 'package:provider/provider.dart';
+import 'package:moneysun/presentation/widgets/time_filter_appbar_widget.dart';
 
-class MonthlySummaryCard extends StatelessWidget {
-  const MonthlySummaryCard({super.key});
+class SummaryCard extends StatelessWidget {
+  final DateTime initialStartDate;
+  final DateTime initialEndDate;
+  const SummaryCard({
+    super.key,
+    required this.initialStartDate,
+    required this.initialEndDate,
+  });
 
   @override
   Widget build(BuildContext context) {
     final userProvider = Provider.of<UserProvider>(context);
     final databaseService = DatabaseService();
-    final now = DateTime.now();
-    final startDate = DateTime(now.year, now.month, 1);
-    final endDate = DateTime(now.year, now.month + 1, 0);
+    final startDate = initialStartDate;
+    final endDate = initialEndDate;
     final currencyFormatter = NumberFormat.currency(
       locale: 'vi_VN',
       symbol: '₫',
@@ -46,7 +52,7 @@ class MonthlySummaryCard extends StatelessWidget {
               children: [
                 // Header
                 Text(
-                  'Tổng quan tháng ${now.month}/${now.year}',
+                  'Tổng quan',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
@@ -68,7 +74,7 @@ class MonthlySummaryCard extends StatelessWidget {
                             ),
                       ),
                       const Text(
-                        'Số dư cuối tháng',
+                        'Số dư tổng',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.grey, fontSize: 12),
                       ),
@@ -97,35 +103,34 @@ class MonthlySummaryCard extends StatelessWidget {
                   ],
                 ),
 
-                const Divider(height: 20),
-
-                // FIX: Thu chi cá nhân
-                _buildSectionTitle(
-                  '💼 Cá nhân',
-                  personalBalance,
-                  currencyFormatter,
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _buildIncomeExpenseSummary(
-                      "Thu nhập",
-                      report.personalIncome,
-                      Colors.green.shade600,
-                      currencyFormatter,
-                    ),
-                    _buildIncomeExpenseSummary(
-                      "Chi tiêu",
-                      report.personalExpense,
-                      Colors.red.shade600,
-                      currencyFormatter,
-                    ),
-                  ],
-                ),
-
                 // FIX: Thu chi chung (chỉ hiển thị khi có partner)
                 if (userProvider.hasPartner) ...[
+                  const Divider(height: 20),
+
+                  // FIX: Thu chi cá nhân
+                  _buildSectionTitle(
+                    '💼 Cá nhân',
+                    personalBalance,
+                    currencyFormatter,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _buildIncomeExpenseSummary(
+                        "Thu nhập",
+                        report.personalIncome,
+                        Colors.green.shade600,
+                        currencyFormatter,
+                      ),
+                      _buildIncomeExpenseSummary(
+                        "Chi tiêu",
+                        report.personalExpense,
+                        Colors.red.shade600,
+                        currencyFormatter,
+                      ),
+                    ],
+                  ),
                   const Divider(height: 20),
                   _buildSectionTitle(
                     '👥 Chung (${userProvider.partnerDisplayName ?? "Đối tác"})',

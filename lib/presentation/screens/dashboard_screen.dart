@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -9,11 +11,11 @@ import 'package:moneysun/presentation/screens/add_transaction_screen.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/presentation/screens/all_transactions_screen.dart';
 import 'package:moneysun/presentation/screens/transfer_screen.dart';
-import 'package:moneysun/presentation/widgets/monthly_summary_card.dart';
+import 'package:moneysun/presentation/widgets/summary_card.dart';
 import 'package:provider/provider.dart';
 import 'package:collection/collection.dart'; // Thêm package collection
 import 'package:moneysun/presentation/widgets/daily_transactions_group.dart';
-import 'package:moneysun/presentation/widgets/time_filter_widget.dart';
+import 'package:moneysun/presentation/widgets/time_filter_appbar_widget.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -30,14 +32,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Add time filter state
   TimeFilter _selectedTimeFilter = TimeFilter.thisMonth;
-  late DateTime _startDate;
-  late DateTime _endDate;
-
-  @override
-  void initState() {
-    super.initState();
-    _updateDateRange();
-  }
+  DateTime _startDate = DateTime(DateTime.now().year, DateTime.now().month, 1);
+  DateTime _endDate = DateTime(
+    DateTime.now().year,
+    DateTime.now().month + 1,
+    0,
+  );
 
   Future<void> _navigateToAddTransaction() async {
     final result = await Navigator.push<bool>(
@@ -50,27 +50,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _refreshKey = UniqueKey(); // Force rebuild
       });
-    }
-  }
-
-  void _updateDateRange() {
-    final now = DateTime.now();
-    switch (_selectedTimeFilter) {
-      case TimeFilter.thisWeek:
-        _startDate = now.subtract(Duration(days: now.weekday - 1));
-        _endDate = _startDate.add(const Duration(days: 6));
-        break;
-      case TimeFilter.thisMonth:
-        _startDate = DateTime(now.year, now.month, 1);
-        _endDate = DateTime(now.year, now.month + 1, 0);
-        break;
-      case TimeFilter.thisYear:
-        _startDate = DateTime(now.year, 1, 1);
-        _endDate = DateTime(now.year, 12, 31);
-        break;
-      case TimeFilter.custom:
-        // Keep current dates
-        break;
     }
   }
 
@@ -173,27 +152,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Tổng quan'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.swap_horiz),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const TransferScreen()),
-              );
-            },
-            tooltip: 'Chuyển tiền',
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              await _authService.signOut();
-              // AuthGate sẽ tự động xử lý điều hướng về màn hình login
-            },
-          ),
-        ],
+      appBar: TimeFilterAppBar(
+        title: 'Tổng quan',
+        selectedFilter: _selectedTimeFilter,
+        startDate: _startDate,
+        endDate: _endDate,
+        onFilterChanged: (filter, start, end) {
+          setState(() {
+            _selectedTimeFilter = filter;
+            _startDate = start;
+            _endDate = end;
+          });
+        },
       ),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -208,20 +178,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const MonthlySummaryCard(),
-              const SizedBox(height: 24),
-
-              TimeFilterWidget(
-                selectedFilter: _selectedTimeFilter,
-                startDate: _startDate,
-                endDate: _endDate,
-                onFilterChanged: (filter, start, end) {
-                  setState(() {
-                    _selectedTimeFilter = filter;
-                    _startDate = start;
-                    _endDate = end;
-                  });
-                },
+              SummaryCard(
+                initialStartDate: _startDate,
+                initialEndDate: _endDate,
               ),
               const SizedBox(height: 16),
               Text(
@@ -259,8 +218,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed:
-            _navigateToAddTransaction, // FIX: Use method with reload handling
+        onPressed: _navigateToAddTransaction,
         tooltip: 'Thêm giao dịch',
         child: const Icon(Icons.add),
       ),
