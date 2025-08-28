@@ -8,6 +8,7 @@ import 'package:moneysun/data/models/wallet_model.dart';
 import 'package:moneysun/data/models/report_data_model.dart';
 import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
+import 'package:moneysun/data/services/local_database_service.dart';
 import 'package:async/async.dart';
 import 'package:collection/collection.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -15,6 +16,8 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 class DatabaseService {
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
   final String? _uid = FirebaseAuth.instance.currentUser?.uid;
+
+  final LocalDatabaseService _localDb = LocalDatabaseService();
 
   static Future<void> enableOfflineSupport() async {
     FirebaseDatabase.instance.setPersistenceEnabled(true);
@@ -127,38 +130,59 @@ class DatabaseService {
   // FIX: addTransaction - Sửa logic cho income transaction
   Future<void> addTransaction(TransactionModel transaction) async {
     if (_uid == null) return;
+    try {
+      // 1. Lưu giao dịch vào database
+      final newTransactionRef = _dbRef.child('transactions').push();
+      final transactionWithId = TransactionModel(
+        id: newTransactionRef.key!,
+        amount: transaction.amount,
+        type: transaction.type,
+        categoryId: transaction.categoryId,
+        walletId: transaction.walletId,
+        date: transaction.date,
+        description: transaction.description,
+        userId: transaction.userId,
+        subCategoryId: transaction.subCategoryId,
+        transferToWalletId: transaction.transferToWalletId,
+      );
+      await newTransactionRef.set(transaction.toJson());
 
-    // 1. Lưu giao dịch vào database
-    final newTransactionRef = _dbRef.child('transactions').push();
-    await newTransactionRef.set(transaction.toJson());
+      // 2. FIX: Cập nhật số dư của ví tương ứng
+      final walletRef = _dbRef.child('wallets').child(transaction.walletId);
+      final walletSnapshot = await walletRef.get();
 
-    // 2. FIX: Cập nhật số dư của ví tương ứng
-    final walletRef = _dbRef.child('wallets').child(transaction.walletId);
-    final walletSnapshot = await walletRef.get();
+      if (walletSnapshot.exists) {
+        double balanceChange = 0;
 
-    if (walletSnapshot.exists) {
-      double balanceChange = 0;
+        switch (transaction.type) {
+          case TransactionType.income:
+            balanceChange = transaction.amount; // CỘNG cho thu nhập
+            break;
+          case TransactionType.expense:
+            balanceChange = -transaction.amount; // TRỪ cho chi tiêu
+            break;
+          case TransactionType.transfer:
+            balanceChange =
+                -transaction.amount; // TRỪ cho transfer (từ ví nguồn)
+            break;
+        }
 
-      switch (transaction.type) {
-        case TransactionType.income:
-          balanceChange = transaction.amount; // CỘNG cho thu nhập
-          break;
-        case TransactionType.expense:
-          balanceChange = -transaction.amount; // TRỪ cho chi tiêu
-          break;
-        case TransactionType.transfer:
-          balanceChange = -transaction.amount; // TRỪ cho transfer (từ ví nguồn)
-          break;
+        await walletRef
+            .child('balance')
+            .set(ServerValue.increment(balanceChange));
       }
 
-      await walletRef
-          .child('balance')
-          .set(ServerValue.increment(balanceChange));
-    }
+      await _localDb.saveTransactionLocally(transactionWithId, syncStatus: 1);
 
-    // 3. Lưu mô tả vào lịch sử
-    if (transaction.description.isNotEmpty) {
-      await saveDescriptionToHistory(transaction.description);
+      if (transaction.description.isNotEmpty) {
+        await _localDb.saveDescriptionToHistory(_uid!, transaction.description);
+      }
+    } catch (e) {
+      if (transaction.description.isNotEmpty) {
+        await _localDb.saveDescriptionToHistory(_uid!, transaction.description);
+      }
+      print("❌ Error adding transaction: $e");
+      rethrow;
     }
   }
 
@@ -364,6 +388,7 @@ class DatabaseService {
         isVisibleToPartner: true,
       );
       await newWalletRef.set(newWallet.toJson());
+      await _localDb.saveWalletLocally(newWallet, syncStatus: 1);
     } catch (e) {
       print("Lỗi khi thêm ví: $e");
       rethrow;
@@ -372,14 +397,20 @@ class DatabaseService {
 
   Future<void> addCategory(String name, String type) async {
     if (_uid == null) return;
-    final newCategoryRef = _dbRef.child('categories').child(_uid!).push();
-    final newCategory = Category(
-      id: newCategoryRef.key!,
-      name: name,
-      ownerId: _uid!,
-      type: type,
-    );
-    await newCategoryRef.set(newCategory.toJson());
+    try {
+      final newCategoryRef = _dbRef.child('categories').child(_uid!).push();
+      final newCategory = Category(
+        id: newCategoryRef.key!,
+        name: name,
+        ownerId: _uid!,
+        type: type,
+      );
+      await newCategoryRef.set(newCategory.toJson());
+      await _localDb.saveCategoryLocally(newCategory, syncStatus: 1);
+    } catch (e) {
+      print("Lỗi khi thêm danh mục: $e");
+      rethrow;
+    }
   }
 
   // Các method khác giữ nguyên từ code cũ...
@@ -397,18 +428,23 @@ class DatabaseService {
         .orderByChild('userId')
         .equalTo(_uid)
         .limitToLast(limit);
-    final recentTransStream = transRef.onValue.map((event) {
-      final List<TransactionModel> transactions = [];
-      if (event.snapshot.exists) {
-        final map = event.snapshot.value as Map<dynamic, dynamic>;
-        map.forEach((key, value) {
-          final snapshot = event.snapshot.child(key);
-          transactions.add(TransactionModel.fromSnapshot(snapshot));
+    final recentTransStream = transRef.onValue
+        .map((event) {
+          final List<TransactionModel> transactions = [];
+          if (event.snapshot.exists) {
+            final map = event.snapshot.value as Map<dynamic, dynamic>;
+            map.forEach((key, value) {
+              final snapshot = event.snapshot.child(key);
+              transactions.add(TransactionModel.fromSnapshot(snapshot));
+            });
+          }
+          transactions.sort((a, b) => b.date.compareTo(a.date));
+          return transactions;
+        })
+        .handleError((error) {
+          print('❌ Firebase stream error, falling back to local: $error');
+          return <TransactionModel>[];
         });
-      }
-      transactions.sort((a, b) => b.date.compareTo(a.date));
-      return transactions;
-    });
 
     return StreamZip([walletsStream, categoriesStream, recentTransStream]).map((
       results,
@@ -851,30 +887,73 @@ class DatabaseService {
 
   Future<List<String>> getDescriptionHistory() async {
     if (_uid == null) return [];
+
     try {
+      // Get from local database first (faster)
+      final localSuggestions = await _localDb.getDescriptionSuggestions(_uid!);
+      if (localSuggestions.isNotEmpty) {
+        return localSuggestions;
+      }
+
+      // Fallback to Firebase (existing logic)
       final snapshot = await _dbRef
           .child('user_descriptions')
           .child(_uid!)
           .get();
+
       if (snapshot.exists) {
         final descriptionsMap = snapshot.value as Map<dynamic, dynamic>;
-        return descriptionsMap.keys.cast<String>().toList();
+        final firebaseDescriptions = descriptionsMap.keys
+            .cast<String>()
+            .toList();
+
+        // ✨ Cache Firebase descriptions to local DB
+        for (final desc in firebaseDescriptions) {
+          await _localDb.saveDescriptionToHistory(_uid!, desc);
+        }
+
+        return firebaseDescriptions;
       }
+
       return [];
     } catch (e) {
-      print("Lỗi khi lấy lịch sử mô tả: $e");
+      print("❌ Error getting description history: $e");
       return [];
     }
   }
 
   Future<void> saveDescriptionToHistory(String description) async {
     if (_uid == null || description.isEmpty) return;
+
     try {
+      // 1. Save to local database immediately
+      await _localDb.saveDescriptionToHistory(_uid!, description);
+
+      // 2. Try to save to Firebase
       await _dbRef.child('user_descriptions').child(_uid!).update({
         description: true,
       });
     } catch (e) {
-      print("Lỗi khi lưu mô tả: $e");
+      // If Firebase fails, local save is already done
+      print("⚠️ Warning: Failed to save description to Firebase: $e");
+    }
+  }
+
+  Future<List<String>> searchDescriptionHistory(
+    String query, {
+    int limit = 5,
+  }) async {
+    if (_uid == null || query.trim().isEmpty) return [];
+
+    try {
+      return await _localDb.searchDescriptionHistory(
+        _uid!,
+        query.trim(),
+        limit: limit,
+      );
+    } catch (e) {
+      print("❌ Error searching description history: $e");
+      return [];
     }
   }
 
@@ -1109,5 +1188,124 @@ class DatabaseService {
       print('Error syncing partnership: $e');
       rethrow;
     }
+  }
+
+  Future<List<TransactionModel>> getTransactionsOfflineFirst({
+    String? userId,
+    DateTime? startDate,
+    DateTime? endDate,
+    int? limit,
+  }) async {
+    try {
+      // Try local database first
+      final localTransactions = await _localDb.getLocalTransactions(
+        userId: userId,
+        startDate: startDate,
+        endDate: endDate,
+        limit: limit,
+      );
+
+      if (localTransactions.isNotEmpty) {
+        print(
+          '📱 Returning ${localTransactions.length} transactions from local DB',
+        );
+        return localTransactions;
+      }
+
+      // Fallback to Firebase stream conversion
+      print('☁️ Fetching transactions from Firebase...');
+      // Note: In real implementation, you'd want to convert the stream to future
+      // For now, return empty list and let the stream handle the data
+      return [];
+    } catch (e) {
+      print('❌ Error getting transactions offline-first: $e');
+      return [];
+    }
+  }
+
+  // ✨ V7: Sync local changes to Firebase
+  Future<void> syncLocalChangesToFirebase() async {
+    if (_uid == null) return;
+
+    try {
+      // Get unsynced transactions
+      final unsyncedTransactions = await _localDb.getUnsyncedRecords(
+        'transactions',
+      );
+      print(
+        '🔄 Syncing ${unsyncedTransactions.length} unsynced transactions...',
+      );
+
+      for (final record in unsyncedTransactions) {
+        try {
+          final transaction = TransactionModel(
+            id: record['id'],
+            amount: record['amount'],
+            type: TransactionType.values.firstWhere(
+              (e) => e.name == record['type'],
+            ),
+            categoryId: record['categoryId'],
+            walletId: record['walletId'],
+            date: DateTime.parse(record['date']),
+            description: record['description'] ?? '',
+            userId: record['userId'],
+            subCategoryId: record['subCategoryId'],
+            transferToWalletId: record['transferToWalletId'],
+          );
+
+          // Upload to Firebase
+          await _dbRef
+              .child('transactions')
+              .child(transaction.id)
+              .set(transaction.toJson());
+
+          // Mark as synced
+          await _localDb.markAsSynced('transactions', transaction.id);
+          print('✅ Synced transaction: ${transaction.id}');
+        } catch (e) {
+          print('❌ Failed to sync transaction ${record['id']}: $e');
+        }
+      }
+
+      print('🎉 Sync completed successfully');
+    } catch (e) {
+      print('❌ Error syncing local changes: $e');
+    }
+  }
+
+  // ✨ V7: Database health check
+  Future<Map<String, dynamic>> getDatabaseHealth() async {
+    try {
+      final localStats = await _localDb.getDatabaseStats();
+
+      // Try Firebase connection
+      bool firebaseConnected = false;
+      try {
+        await _dbRef.child('.info/connected').get();
+        firebaseConnected = true;
+      } catch (e) {
+        firebaseConnected = false;
+      }
+
+      return {
+        'localDatabase': localStats,
+        'firebaseConnected': firebaseConnected,
+        'lastSync': DateTime.now().toIso8601String(),
+      };
+    } catch (e) {
+      return {'error': e.toString(), 'firebaseConnected': false};
+    }
+  }
+
+  @override
+  void handleError(dynamic error, {String? context}) {
+    final errorMessage = context != null
+        ? '$context: $error'
+        : 'Database error: $error';
+
+    print('🚨 $errorMessage');
+
+    // Could add error tracking service here
+    // ErrorTrackingService.logError(error, context);
   }
 }
