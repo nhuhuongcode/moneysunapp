@@ -37,20 +37,33 @@ class LocalDatabaseService {
     // Bảng transactions
     await db.execute('''
       CREATE TABLE transactions (
-        id TEXT PRIMARY KEY,
-        amount REAL NOT NULL,
-        type TEXT NOT NULL,
-        categoryId TEXT,
-        walletId TEXT NOT NULL,
-        date TEXT NOT NULL,
-        description TEXT,
-        userId TEXT NOT NULL,
-        subCategoryId TEXT,
-        transferToWalletId TEXT,
-        syncStatus INTEGER DEFAULT 0,
-        createdAt INTEGER DEFAULT (strftime('%s', 'now')),
-        updatedAt INTEGER DEFAULT (strftime('%s', 'now'))
-      )
+      id TEXT PRIMARY KEY,
+      firebase_id TEXT UNIQUE, -- Firebase document ID
+      amount REAL NOT NULL,
+      type TEXT NOT NULL,
+      category_id TEXT,
+      wallet_id TEXT NOT NULL,
+      date TEXT NOT NULL,
+      description TEXT,
+      user_id TEXT NOT NULL,
+      sub_category_id TEXT,
+      transfer_to_wallet_id TEXT,
+      
+      sync_status INTEGER DEFAULT 0, -- 0: pending, 1: synced, 2: conflict, 3: error
+      last_modified INTEGER DEFAULT (strftime('%s', 'now')),
+      version INTEGER DEFAULT 1,
+      checksum TEXT, -- For conflict detection
+      
+      conflict_data TEXT, 
+      resolved_at INTEGER,
+      
+      created_at INTEGER DEFAULT (strftime('%s', 'now')),
+      updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+      deleted_at INTEGER, 
+      
+      FOREIGN KEY (wallet_id) REFERENCES wallets(id),
+      FOREIGN KEY (category_id) REFERENCES categories(id)
+    )
     ''');
 
     // Bảng wallets
@@ -97,29 +110,58 @@ class LocalDatabaseService {
     // Bảng sync_queue để quản lý offline sync
     await db.execute('''
       CREATE TABLE sync_queue (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tableName TEXT NOT NULL,
-        recordId TEXT NOT NULL,
-        operation TEXT NOT NULL, -- 'INSERT', 'UPDATE', 'DELETE'
-        data TEXT, -- JSON data
-        priority INTEGER DEFAULT 1,
-        retryCount INTEGER DEFAULT 0,
-        createdAt INTEGER DEFAULT (strftime('%s', 'now'))
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      table_name TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      firebase_id TEXT,
+      operation TEXT NOT NULL,
+      data TEXT NOT NULL,
+      priority INTEGER DEFAULT 1,
+      retry_count INTEGER DEFAULT 0,
+      max_retries INTEGER DEFAULT 3,
+      last_error TEXT,
+      scheduled_at INTEGER DEFAULT (strftime('%s', 'now')),
+      created_at INTEGER DEFAULT (strftime('%s', 'now')),
+      
+      UNIQUE(table_name, record_id, operation)
+    )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE sync_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER DEFAULT (strftime('%s', 'now'))
       )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE change_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      table_name TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      operation TEXT NOT NULL, -- INSERT, UPDATE, DELETE
+      changes TEXT, -- JSON of changed fields
+      user_id TEXT NOT NULL,
+      created_at INTEGER DEFAULT (strftime('%s', 'now'))
+    )
     ''');
 
     // Index cho performance
     await db.execute(
-      'CREATE INDEX idx_transactions_date ON transactions(date)',
+      'CREATE INDEX idx_transactions_sync_status ON transactions(sync_status, last_modified)',
     );
     await db.execute(
-      'CREATE INDEX idx_transactions_user ON transactions(userId)',
+      'CREATE INDEX idx_transactions_user_date ON transactions(user_id, date)',
     );
     await db.execute(
-      'CREATE INDEX idx_description_history_user ON description_history(userId)',
+      'CREATE INDEX idx_transactions_firebase_id ON transactions(firebase_id)',
     );
     await db.execute(
-      'CREATE INDEX idx_sync_queue_priority ON sync_queue(priority, createdAt)',
+      'CREATE INDEX idx_transactions_checksum ON transactions(checksum)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_change_log_user_time ON change_log(user_id, created_at);',
     );
   }
 

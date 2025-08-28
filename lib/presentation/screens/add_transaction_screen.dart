@@ -6,6 +6,7 @@ import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/services/database_service.dart';
+import 'package:moneysun/data/services/offline_sync_service.dart';
 import 'package:moneysun/presentation/screens/transfer_screen.dart';
 import 'package:provider/provider.dart';
 
@@ -23,6 +24,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   final _amountController = TextEditingController();
   final _descriptionController = TextEditingController();
   final DatabaseService _databaseService = DatabaseService();
+  final OfflineSyncService _offlineSyncService = OfflineSyncService();
 
   TransactionType _selectedType = TransactionType.expense;
   String? _selectedWalletId;
@@ -30,16 +32,38 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   String? _selectedSubCategoryId;
   DateTime _selectedDate = DateTime.now();
 
+  bool _isOnline = false;
+  final LayerLink _layerLink = LayerLink();
+  OverlayEntry? _overlayEntry;
+  List<String> _filteredSuggestions = [];
+
   bool _isLoading = false;
   List<String> _descriptionHistory = [];
 
   @override
   void initState() {
     super.initState();
+    _initializeServices();
     _loadDescriptionHistory();
     if (widget.transactionToEdit != null) {
       _populateFieldsForEdit();
     }
+  }
+
+  Future<void> _initializeServices() async {
+    await _offlineSyncService.initialize();
+    setState(() {
+      _isOnline = _offlineSyncService.isOnline;
+    });
+
+    // Listen to connectivity changes
+    _offlineSyncService.addListener(() {
+      if (mounted) {
+        setState(() {
+          _isOnline = _offlineSyncService.isOnline;
+        });
+      }
+    });
   }
 
   void _populateFieldsForEdit() {
@@ -54,10 +78,16 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
   Future<void> _loadDescriptionHistory() async {
-    final history = await _databaseService.getDescriptionHistory();
-    setState(() {
-      _descriptionHistory = history;
-    });
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId != null) {
+      final history = await _offlineSyncService.getDescriptionSuggestions(
+        userId,
+        limit: 10,
+      );
+      setState(() {
+        _descriptionHistory = history;
+      });
+    }
   }
 
   @override
@@ -72,13 +102,49 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           icon: const Icon(Icons.close, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text(
-          widget.transactionToEdit != null ? 'Sửa giao dịch' : 'Thêm giao dịch',
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
+        title: Row(
+          children: [
+            Text(
+              widget.transactionToEdit != null
+                  ? 'Sửa giao dịch'
+                  : 'Thêm giao dịch',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(width: 8),
+            const SizedBox(width: 8),
+            // THÊM MỚI: Connection status indicator
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: _isOnline ? Colors.green : Colors.orange,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _isOnline ? Icons.cloud_done : Icons.cloud_off,
+                    size: 16,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    _isOnline ? 'Online' : 'Offline',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
+
         actions: [
           IconButton(
             icon: const Icon(Icons.swap_horiz),
@@ -728,47 +794,141 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
   Widget _buildDescriptionInput() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Mô tả (tùy chọn)',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            TextFormField(
-              controller: _descriptionController,
-              decoration: const InputDecoration(
-                labelText: 'Nhập mô tả...',
-                border: OutlineInputBorder(),
-              ),
-              maxLines: 2,
-            ),
-            // FIX: Gợi ý mô tả từ lịch sử
-            if (_descriptionHistory.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              const Text(
-                'Gợi ý từ lịch sử:',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-              const SizedBox(height: 4),
-              Wrap(
-                spacing: 8,
-                children: _descriptionHistory.take(5).map((desc) {
-                  return ActionChip(
-                    label: Text(desc),
-                    onPressed: () {
-                      _descriptionController.text = desc;
+    return _buildCard(
+      title: 'Mô tả (tùy chọn)',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // THAY ĐỔI: Sử dụng Autocomplete widget
+          Autocomplete<String>(
+            optionsBuilder: (TextEditingValue textEditingValue) async {
+              if (textEditingValue.text.isEmpty) {
+                return _descriptionHistory.take(5);
+              }
+
+              // THÊM MỚI: Search trong local database
+              final userId = FirebaseAuth.instance.currentUser?.uid;
+              if (userId != null) {
+                final suggestions = await _offlineSyncService
+                    .searchDescriptionHistory(userId, textEditingValue.text);
+                return suggestions;
+              }
+
+              return _descriptionHistory
+                  .where(
+                    (desc) => desc.toLowerCase().contains(
+                      textEditingValue.text.toLowerCase(),
+                    ),
+                  )
+                  .take(5);
+            },
+            onSelected: (String selection) {
+              _descriptionController.text = selection;
+            },
+            fieldViewBuilder:
+                (context, controller, focusNode, onEditingComplete) {
+                  // Sync với controller chính
+                  _descriptionController.text = controller.text;
+
+                  return TextFormField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    onEditingComplete: onEditingComplete,
+                    decoration: InputDecoration(
+                      hintText: 'Nhập mô tả...',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      prefixIcon: const Icon(Icons.description_outlined),
+                      suffixIcon: controller.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                controller.clear();
+                                _descriptionController.clear();
+                              },
+                            )
+                          : null,
+                    ),
+                    maxLines: 2,
+                    onChanged: (value) {
+                      _descriptionController.text = value;
                     },
                   );
-                }).toList(),
+                },
+            optionsViewBuilder: (context, onSelected, options) {
+              return Align(
+                alignment: Alignment.topLeft,
+                child: Material(
+                  elevation: 4.0,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    constraints: const BoxConstraints(maxHeight: 200),
+                    width: MediaQuery.of(context).size.width - 32,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.all(8.0),
+                      shrinkWrap: true,
+                      itemCount: options.length,
+                      itemBuilder: (context, index) {
+                        final option = options.elementAt(index);
+                        return ListTile(
+                          dense: true,
+                          leading: const Icon(
+                            Icons.history,
+                            size: 18,
+                            color: Colors.grey,
+                          ),
+                          title: Text(
+                            option,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                          onTap: () => onSelected(option),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+
+          // THÊM MỚI: Quick access chips for recent descriptions
+          if (_descriptionHistory.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Gợi ý nhanh:',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey,
+                fontWeight: FontWeight.w500,
               ),
-            ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: _descriptionHistory.take(3).map((desc) {
+                return ActionChip(
+                  label: Text(desc, style: const TextStyle(fontSize: 12)),
+                  onPressed: () {
+                    _descriptionController.text = desc;
+                    // Trigger autocomplete update
+                    setState(() {});
+                  },
+                  backgroundColor: Theme.of(
+                    context,
+                  ).colorScheme.primary.withOpacity(0.1),
+                  labelStyle: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                );
+              }).toList(),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -858,7 +1018,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     try {
       final amount = double.parse(_amountController.text);
       final transaction = TransactionModel(
-        id: widget.transactionToEdit?.id ?? '',
+        id:
+            widget.transactionToEdit?.id ??
+            DateTime.now().millisecondsSinceEpoch.toString(),
         amount: amount,
         type: _selectedType,
         categoryId: _selectedCategoryId,
@@ -870,96 +1032,46 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       );
 
       if (widget.transactionToEdit != null) {
-        // Sửa giao dịch
+        // CẬP NHẬT: Use online service for updates
         await _databaseService.updateTransaction(
           transaction,
           widget.transactionToEdit!,
         );
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Đã cập nhật giao dịch')));
       } else {
-        // Thêm giao dịch mới
-        await _databaseService.addTransaction(transaction);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Đã thêm giao dịch')));
+        // THAY ĐỔI: Use offline-first for new transactions
+        await _offlineSyncService.addTransaction(transaction);
       }
+
+      // Hiển thị trạng thái sync
+      final syncMessage = _isOnline
+          ? 'Đã thêm giao dịch và đồng bộ'
+          : 'Đã lưu giao dịch (sẽ đồng bộ khi có mạng)';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                _isOnline ? Icons.cloud_done : Icons.cloud_off,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 8),
+              Text(syncMessage),
+            ],
+          ),
+          backgroundColor: _isOnline ? Colors.green : Colors.orange,
+        ),
+      );
 
       Navigator.pop(context);
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi: $e'), backgroundColor: Colors.red),
+      );
     } finally {
       setState(() {
         _isLoading = false;
       });
-    }
-  }
-
-  Future<void> _saveTransaction() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    try {
-      // Show loading
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const Center(child: CircularProgressIndicator()),
-      );
-
-      final transaction = TransactionModel(
-        id: widget.transactionToEdit?.id ?? '',
-        amount: double.parse(_amountController.text),
-        type: _selectedType,
-        categoryId: _selectedCategoryId,
-        subCategoryId: _selectedSubCategoryId,
-        walletId: _selectedWalletId!,
-        date: _selectedDate,
-        description: _descriptionController.text,
-        userId: FirebaseAuth.instance.currentUser!.uid,
-      );
-
-      if (widget.transactionToEdit != null) {
-        // Update existing transaction
-        await _databaseService.updateTransaction(
-          transaction,
-          widget.transactionToEdit!,
-        );
-      } else {
-        // Add new transaction
-        await _databaseService.addTransaction(transaction);
-      }
-
-      // Hide loading
-      Navigator.of(context).pop();
-
-      // FIX: Navigate back with reload signal
-      Navigator.of(context).pop(true); // Return true to signal reload needed
-
-      // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            widget.transactionToEdit != null
-                ? 'Đã cập nhật giao dịch'
-                : 'Đã thêm giao dịch mới',
-          ),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } catch (e) {
-      // Hide loading
-      Navigator.of(context).pop();
-
-      // Show error
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Lỗi: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
     }
   }
 

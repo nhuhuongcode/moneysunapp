@@ -3,6 +3,42 @@ import 'package:intl/intl.dart';
 
 enum TimeFilter { thisWeek, thisMonth, thisYear, custom }
 
+// THÊM MỚI: Enum cho trạng thái kết nối
+enum ConnectivityStatus { online, offline, syncing, syncError, unknown }
+
+// THÊM MỚI: Model cho sync status
+class SyncStatusInfo {
+  final ConnectivityStatus status;
+  final DateTime? lastSyncTime;
+  final int? pendingCount;
+  final String? errorMessage;
+  final bool isSyncing;
+
+  const SyncStatusInfo({
+    required this.status,
+    this.lastSyncTime,
+    this.pendingCount,
+    this.errorMessage,
+    this.isSyncing = false,
+  });
+
+  factory SyncStatusInfo.online({DateTime? lastSyncTime}) => SyncStatusInfo(
+    status: ConnectivityStatus.online,
+    lastSyncTime: lastSyncTime,
+  );
+
+  factory SyncStatusInfo.offline({int pendingCount = 0}) => SyncStatusInfo(
+    status: ConnectivityStatus.offline,
+    pendingCount: pendingCount,
+  );
+
+  factory SyncStatusInfo.syncing() =>
+      SyncStatusInfo(status: ConnectivityStatus.syncing, isSyncing: true);
+
+  factory SyncStatusInfo.error(String error) =>
+      SyncStatusInfo(status: ConnectivityStatus.syncError, errorMessage: error);
+}
+
 class TimeFilterAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String title;
   final TimeFilter selectedFilter;
@@ -13,6 +49,12 @@ class TimeFilterAppBar extends StatelessWidget implements PreferredSizeWidget {
   final Widget? leading;
   final PreferredSizeWidget? bottom;
   final bool showDateRange;
+
+  // THÊM MỚI: Connectivity và sync parameters
+  final SyncStatusInfo? syncStatus;
+  final VoidCallback? onSyncPressed;
+  final VoidCallback? onSyncStatusTap;
+  final bool showConnectivityStatus;
 
   const TimeFilterAppBar({
     super.key,
@@ -25,6 +67,11 @@ class TimeFilterAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.leading,
     this.bottom,
     this.showDateRange = true,
+    // THÊM MỚI
+    this.syncStatus,
+    this.onSyncPressed,
+    this.onSyncStatusTap,
+    this.showConnectivityStatus = true,
   });
 
   @override
@@ -48,37 +95,8 @@ class TimeFilterAppBar extends StatelessWidget implements PreferredSizeWidget {
                     () => _navigatePrevious(),
                   ),
 
-                // Time display
-                Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).primaryColor.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        _getTimeIcon(),
-                        size: 16,
-                        color: Theme.of(context).primaryColor,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _getFormattedTimeRange(),
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Theme.of(context).primaryColor,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                // Time display with sync status
+                _buildTimeDisplayWithStatus(context),
 
                 // Next button
                 if (selectedFilter != TimeFilter.custom)
@@ -89,66 +107,302 @@ class TimeFilterAppBar extends StatelessWidget implements PreferredSizeWidget {
                   ),
               ],
             )
-          : Text(
-              title,
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
-            ),
+          : _buildTitleWithStatus(context),
       leading: leading,
-      actions: [
+      actions: _buildActions(context),
+      bottom: bottom,
+    );
+  }
+
+  // THÊM MỚI: Title với sync status
+  Widget _buildTitleWithStatus(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          style: Theme.of(
+            context,
+          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+        ),
+        if (showConnectivityStatus && syncStatus != null) ...[
+          const SizedBox(width: 8),
+          _buildSyncStatusBadge(context, isCompact: true),
+        ],
+      ],
+    );
+  }
+
+  // THÊM MỚI: Time display với sync status
+  Widget _buildTimeDisplayWithStatus(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Main time display
         Container(
-          margin: const EdgeInsets.only(right: 12),
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
             color: Theme.of(context).primaryColor.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(20),
           ),
-          child: PopupMenuButton<TimeFilter>(
-            icon: Icon(
-              Icons.tune_rounded,
-              color: Theme.of(context).primaryColor,
-              size: 20,
-            ),
-            tooltip: 'Lọc thời gian',
-            elevation: 4,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            position: PopupMenuPosition.under,
-            onSelected: (filter) => _handleFilterSelection(context, filter),
-            itemBuilder: (context) => [
-              _buildPopupMenuItem(
-                context,
-                TimeFilter.thisWeek,
-                Icons.view_week_rounded,
-                'Tuần này',
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _getTimeIcon(),
+                size: 16,
+                color: Theme.of(context).primaryColor,
               ),
-              _buildPopupMenuItem(
-                context,
-                TimeFilter.thisMonth,
-                Icons.calendar_month_rounded,
-                'Tháng này',
-              ),
-              _buildPopupMenuItem(
-                context,
-                TimeFilter.thisYear,
-                Icons.calendar_today_rounded,
-                'Năm này',
-              ),
-              const PopupMenuDivider(),
-              _buildPopupMenuItem(
-                context,
-                TimeFilter.custom,
-                Icons.date_range_rounded,
-                'Tùy chọn...',
+              const SizedBox(width: 8),
+              Text(
+                _getFormattedTimeRange(),
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Theme.of(context).primaryColor,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ),
         ),
-        if (additionalActions != null) ...additionalActions!,
+        // THÊM MỚI: Sync status badge
+        if (showConnectivityStatus && syncStatus != null) ...[
+          const SizedBox(height: 4),
+          _buildSyncStatusBadge(context),
+        ],
       ],
-      bottom: bottom,
     );
+  }
+
+  // THÊM MỚI: Sync status badge
+  Widget _buildSyncStatusBadge(BuildContext context, {bool isCompact = false}) {
+    if (syncStatus == null) return const SizedBox.shrink();
+
+    final colors = _getSyncStatusColors(context);
+    final icon = _getSyncStatusIcon();
+    final text = _getSyncStatusText(isCompact);
+
+    return GestureDetector(
+      onTap: onSyncStatusTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        padding: EdgeInsets.symmetric(
+          horizontal: isCompact ? 6 : 8,
+          vertical: isCompact ? 2 : 4,
+        ),
+        decoration: BoxDecoration(
+          color: colors['background'],
+          borderRadius: BorderRadius.circular(isCompact ? 10 : 12),
+          border: Border.all(color: colors['border']!, width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (syncStatus!.isSyncing)
+              SizedBox(
+                width: isCompact ? 12 : 14,
+                height: isCompact ? 12 : 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(colors['icon']!),
+                ),
+              )
+            else
+              Icon(icon, size: isCompact ? 12 : 14, color: colors['icon']),
+            const SizedBox(width: 4),
+            Text(
+              text,
+              style: TextStyle(
+                fontSize: isCompact ? 10 : 11,
+                color: colors['text'],
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // THÊM MỚI: Lấy màu sắc cho sync status
+  Map<String, Color> _getSyncStatusColors(BuildContext context) {
+    switch (syncStatus!.status) {
+      case ConnectivityStatus.online:
+        return {
+          'background': Colors.green.withOpacity(0.15),
+          'border': Colors.green.withOpacity(0.3),
+          'icon': Colors.green.shade700,
+          'text': Colors.green.shade800,
+        };
+      case ConnectivityStatus.offline:
+        return {
+          'background': Colors.orange.withOpacity(0.15),
+          'border': Colors.orange.withOpacity(0.3),
+          'icon': Colors.orange.shade700,
+          'text': Colors.orange.shade800,
+        };
+      case ConnectivityStatus.syncing:
+        return {
+          'background': Colors.blue.withOpacity(0.15),
+          'border': Colors.blue.withOpacity(0.3),
+          'icon': Colors.blue.shade700,
+          'text': Colors.blue.shade800,
+        };
+      case ConnectivityStatus.syncError:
+        return {
+          'background': Colors.red.withOpacity(0.15),
+          'border': Colors.red.withOpacity(0.3),
+          'icon': Colors.red.shade700,
+          'text': Colors.red.shade800,
+        };
+      case ConnectivityStatus.unknown:
+        return {
+          'background': Colors.grey.withOpacity(0.15),
+          'border': Colors.grey.withOpacity(0.3),
+          'icon': Colors.grey.shade700,
+          'text': Colors.grey.shade800,
+        };
+    }
+  }
+
+  // THÊM MỚI: Lấy icon cho sync status
+  IconData _getSyncStatusIcon() {
+    switch (syncStatus!.status) {
+      case ConnectivityStatus.online:
+        return Icons.cloud_done_rounded;
+      case ConnectivityStatus.offline:
+        return Icons.cloud_off_rounded;
+      case ConnectivityStatus.syncing:
+        return Icons.sync_rounded;
+      case ConnectivityStatus.syncError:
+        return Icons.sync_problem_rounded;
+      case ConnectivityStatus.unknown:
+        return Icons.help_outline_rounded;
+    }
+  }
+
+  // THÊM MỚI: Lấy text cho sync status
+  String _getSyncStatusText(bool isCompact) {
+    if (isCompact) {
+      switch (syncStatus!.status) {
+        case ConnectivityStatus.online:
+          return 'Online';
+        case ConnectivityStatus.offline:
+          return 'Offline';
+        case ConnectivityStatus.syncing:
+          return 'Sync';
+        case ConnectivityStatus.syncError:
+          return 'Error';
+        case ConnectivityStatus.unknown:
+          return '?';
+      }
+    }
+
+    switch (syncStatus!.status) {
+      case ConnectivityStatus.online:
+        if (syncStatus!.lastSyncTime != null) {
+          final diff = DateTime.now().difference(syncStatus!.lastSyncTime!);
+          if (diff.inMinutes < 1) return 'Vừa sync';
+          if (diff.inMinutes < 60) return '${diff.inMinutes}p trước';
+          if (diff.inHours < 24) return '${diff.inHours}h trước';
+          return 'Online';
+        }
+        return 'Online';
+      case ConnectivityStatus.offline:
+        final pending = syncStatus!.pendingCount ?? 0;
+        return pending > 0 ? 'Offline ($pending)' : 'Offline';
+      case ConnectivityStatus.syncing:
+        return 'Đang sync...';
+      case ConnectivityStatus.syncError:
+        return 'Lỗi sync';
+      case ConnectivityStatus.unknown:
+        return 'Không rõ';
+    }
+  }
+
+  // CẬP NHẬT: Build actions với sync controls
+  List<Widget> _buildActions(BuildContext context) {
+    final actions = <Widget>[];
+
+    // THÊM MỚI: Manual sync button khi offline
+    if (syncStatus?.status == ConnectivityStatus.offline &&
+        onSyncPressed != null) {
+      actions.add(
+        Container(
+          margin: const EdgeInsets.only(right: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: Colors.orange.withOpacity(0.2),
+          ),
+          child: IconButton(
+            icon: const Icon(Icons.sync_rounded),
+            color: Colors.orange.shade700,
+            tooltip: 'Đồng bộ thủ công',
+            onPressed: onSyncPressed,
+          ),
+        ),
+      );
+    }
+
+    // Time filter button
+    actions.add(
+      Container(
+        margin: const EdgeInsets.only(right: 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: Theme.of(context).primaryColor.withOpacity(0.2),
+        ),
+        child: PopupMenuButton<TimeFilter>(
+          icon: Icon(
+            Icons.tune_rounded,
+            color: Theme.of(context).primaryColor,
+            size: 20,
+          ),
+          tooltip: 'Lọc thời gian',
+          elevation: 4,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          position: PopupMenuPosition.under,
+          onSelected: (filter) => _handleFilterSelection(context, filter),
+          itemBuilder: (context) => [
+            _buildPopupMenuItem(
+              context,
+              TimeFilter.thisWeek,
+              Icons.view_week_rounded,
+              'Tuần này',
+            ),
+            _buildPopupMenuItem(
+              context,
+              TimeFilter.thisMonth,
+              Icons.calendar_month_rounded,
+              'Tháng này',
+            ),
+            _buildPopupMenuItem(
+              context,
+              TimeFilter.thisYear,
+              Icons.calendar_today_rounded,
+              'Năm này',
+            ),
+            const PopupMenuDivider(),
+            _buildPopupMenuItem(
+              context,
+              TimeFilter.custom,
+              Icons.date_range_rounded,
+              'Tùy chọn...',
+            ),
+          ],
+        ),
+      ),
+    );
+
+    // Additional actions
+    if (additionalActions != null) {
+      actions.addAll(additionalActions!);
+    }
+
+    return actions;
   }
 
   Widget _buildNavigationButton(
@@ -268,6 +522,10 @@ class TimeFilterAppBar extends StatelessWidget implements PreferredSizeWidget {
   Size get preferredSize {
     double height = kToolbarHeight;
     if (bottom != null) height += bottom!.preferredSize.height;
+    // THÊM MỚI: Extra space cho sync status badge
+    if (showConnectivityStatus && syncStatus != null && showDateRange) {
+      height += 8; // Extra space for sync status
+    }
     return Size.fromHeight(height);
   }
 
@@ -393,7 +651,7 @@ class TimeFilterAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-// Extension widget for screens that need both TimeFilter and TabBar
+// CẬP NHẬT: TimeFilterAppBarWithTabs với sync status
 class TimeFilterAppBarWithTabs extends StatelessWidget
     implements PreferredSizeWidget {
   final String title;
@@ -406,6 +664,12 @@ class TimeFilterAppBarWithTabs extends StatelessWidget
   final List<Tab> tabs;
   final bool showDateRange;
 
+  // THÊM MỚI: Sync status parameters
+  final SyncStatusInfo? syncStatus;
+  final VoidCallback? onSyncPressed;
+  final VoidCallback? onSyncStatusTap;
+  final bool showConnectivityStatus;
+
   const TimeFilterAppBarWithTabs({
     super.key,
     required this.title,
@@ -417,6 +681,11 @@ class TimeFilterAppBarWithTabs extends StatelessWidget
     required this.tabs,
     this.additionalActions,
     this.showDateRange = true,
+    // THÊM MỚI
+    this.syncStatus,
+    this.onSyncPressed,
+    this.onSyncStatusTap,
+    this.showConnectivityStatus = true,
   });
 
   @override
@@ -429,6 +698,11 @@ class TimeFilterAppBarWithTabs extends StatelessWidget
       onFilterChanged: onFilterChanged,
       additionalActions: additionalActions,
       showDateRange: showDateRange,
+      // THÊM MỚI: Pass sync status
+      syncStatus: syncStatus,
+      onSyncPressed: onSyncPressed,
+      onSyncStatusTap: onSyncStatusTap,
+      showConnectivityStatus: showConnectivityStatus,
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(60),
         child: Container(
@@ -502,6 +776,10 @@ class TimeFilterAppBarWithTabs extends StatelessWidget
   Size get preferredSize {
     double height = kToolbarHeight;
     height += 60; // TabBar section
+    // THÊM MỚI: Extra space cho sync status badge
+    if (showConnectivityStatus && syncStatus != null && showDateRange) {
+      height += 8;
+    }
     return Size.fromHeight(height);
   }
 }
