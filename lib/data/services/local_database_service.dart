@@ -1,4 +1,7 @@
+<<<<<<< Updated upstream
 // lib/data/services/local_database_service.dart
+=======
+>>>>>>> Stashed changes
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
@@ -9,7 +12,11 @@ import 'dart:convert';
 class LocalDatabaseService {
   static Database? _database;
   static const String _databaseName = 'moneysun_local.db';
+<<<<<<< Updated upstream
   static const int _databaseVersion = 1;
+=======
+  static const int _databaseVersion = 2;
+>>>>>>> Stashed changes
 
   // Singleton pattern
   static final LocalDatabaseService _instance =
@@ -107,6 +114,7 @@ class LocalDatabaseService {
       )
     ''');
 
+<<<<<<< Updated upstream
     // Bảng sync_queue để quản lý offline sync
     await db.execute('''
       CREATE TABLE sync_queue (
@@ -177,6 +185,261 @@ class LocalDatabaseService {
   }
 
   // ============ TRANSACTIONS ============
+=======
+      // FIXED: Enhanced description_history table with proper defaults
+      await db.execute('''
+        CREATE TABLE description_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          userId TEXT NOT NULL,
+          description TEXT NOT NULL,
+          usageCount INTEGER DEFAULT 1,
+          lastUsed INTEGER DEFAULT (strftime('%s', 'now')),
+          createdAt INTEGER DEFAULT (strftime('%s', 'now')),
+          updatedAt INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          -- Context information for smart suggestions
+          type TEXT,
+          categoryId TEXT,
+          amount REAL,
+          
+          UNIQUE(userId, description)
+        )
+      ''');
+
+      // Other tables remain the same...
+      await db.execute('''
+        CREATE TABLE sync_queue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tableName TEXT NOT NULL,
+          recordId TEXT NOT NULL,
+          firebase_id TEXT,
+          operation TEXT NOT NULL,
+          data TEXT NOT NULL,
+          priority INTEGER DEFAULT 1,
+          retry_count INTEGER DEFAULT 0,
+          max_retries INTEGER DEFAULT 3,
+          last_error TEXT,
+          scheduled_at INTEGER DEFAULT (strftime('%s', 'now')),
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          UNIQUE(tableName, recordId, operation)
+        )
+      ''');
+
+      await db.execute('''
+        CREATE TABLE sync_metadata (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      ''');
+
+      await db.execute('''
+        CREATE TABLE change_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          table_name TEXT NOT NULL,
+          record_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          changes TEXT,
+          user_id TEXT NOT NULL,
+          created_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      ''');
+
+      // Create indexes for performance
+      await _createIndexes(db);
+
+      print('✅ Database tables created successfully');
+    } catch (e) {
+      print('❌ Error creating tables: $e');
+      rethrow;
+    }
+  }
+
+  // CRITICAL FIX: Completely rewritten upgrade logic
+  Future<void> _upgradeDatabase(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
+    print('🔄 Upgrading database from version $oldVersion to $newVersion');
+
+    if (oldVersion < 2) {
+      await _upgradeToVersion2(db);
+    }
+  }
+
+  // CRITICAL FIX: Safe upgrade to version 2
+  Future<void> _upgradeToVersion2(Database db) async {
+    try {
+      print('📝 Upgrading to version 2...');
+
+      // Check if description_history table exists
+      final tables = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='description_history'",
+      );
+
+      if (tables.isEmpty) {
+        // Table doesn't exist, create it
+        await db.execute('''
+          CREATE TABLE description_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            userId TEXT NOT NULL,
+            description TEXT NOT NULL,
+            usageCount INTEGER DEFAULT 1,
+            lastUsed INTEGER DEFAULT (strftime('%s', 'now')),
+            createdAt INTEGER DEFAULT (strftime('%s', 'now')),
+            updatedAt INTEGER DEFAULT (strftime('%s', 'now')),
+            type TEXT,
+            categoryId TEXT,
+            amount REAL,
+            UNIQUE(userId, description)
+          )
+        ''');
+        print('✅ Created description_history table');
+      } else {
+        // Table exists, check and add missing columns
+        final columns = await db.rawQuery(
+          'PRAGMA table_info(description_history)',
+        );
+        final columnNames = columns.map((col) => col['name'] as String).toSet();
+
+        // Add missing columns one by one with SAFE defaults
+        final missingColumns = <String, String>{
+          'type': 'TEXT',
+          'categoryId': 'TEXT',
+          'amount': 'REAL',
+        };
+
+        for (final entry in missingColumns.entries) {
+          if (!columnNames.contains(entry.key)) {
+            try {
+              await db.execute(
+                'ALTER TABLE description_history ADD COLUMN ${entry.key} ${entry.value}',
+              );
+              print('✅ Added column: ${entry.key}');
+            } catch (e) {
+              print('⚠️ Warning: Could not add column ${entry.key}: $e');
+            }
+          }
+        }
+
+        // Handle updatedAt column separately with special logic
+        if (!columnNames.contains('updatedAt')) {
+          try {
+            // CRITICAL FIX: Use constant default, then update
+            await db.execute(
+              'ALTER TABLE description_history ADD COLUMN updatedAt INTEGER DEFAULT 0',
+            );
+
+            // Update all existing records with current timestamp
+            final currentTime = (DateTime.now().millisecondsSinceEpoch / 1000)
+                .round();
+            await db.execute(
+              'UPDATE description_history SET updatedAt = ? WHERE updatedAt = 0',
+              [currentTime],
+            );
+
+            print('✅ Added and initialized updatedAt column');
+          } catch (e) {
+            print('⚠️ Warning: Could not add updatedAt column: $e');
+            // This is not critical, continue without it
+          }
+        }
+      }
+
+      // Create indexes
+      await _createIndexes(db);
+
+      print('✅ Successfully upgraded to version 2');
+    } catch (e) {
+      print('❌ Error upgrading to version 2: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> _createIndexes(Database db) async {
+    final indexes = [
+      'CREATE INDEX IF NOT EXISTS idx_transactions_sync_status ON transactions(sync_status, last_modified)',
+      'CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, date)',
+      'CREATE INDEX IF NOT EXISTS idx_transactions_firebase_id ON transactions(firebase_id)',
+      'CREATE INDEX IF NOT EXISTS idx_wallets_owner ON wallets(ownerId)',
+      'CREATE INDEX IF NOT EXISTS idx_categories_owner_type ON categories(ownerId, type)',
+      'CREATE INDEX IF NOT EXISTS idx_description_user_type ON description_history(userId, type)',
+      'CREATE INDEX IF NOT EXISTS idx_description_user_category ON description_history(userId, categoryId)',
+      'CREATE INDEX IF NOT EXISTS idx_description_user_lastused ON description_history(userId, lastUsed)',
+      'CREATE INDEX IF NOT EXISTS idx_description_user_usage ON description_history(userId, usageCount)',
+      'CREATE INDEX IF NOT EXISTS idx_description_text ON description_history(description)',
+      'CREATE INDEX IF NOT EXISTS idx_sync_queue_priority ON sync_queue(priority, created_at)',
+      'CREATE INDEX IF NOT EXISTS idx_change_log_user_time ON change_log(user_id, created_at)',
+    ];
+
+    for (final indexSql in indexes) {
+      try {
+        await db.execute(indexSql);
+      } catch (e) {
+        print('⚠️ Warning: Could not create index: $e');
+      }
+    }
+  }
+
+  // ========================================================================
+  // EMERGENCY DATABASE RESET METHODS
+  // ========================================================================
+
+  /// CRITICAL: Emergency database reset when migration fails
+  static Future<void> emergencyDatabaseReset() async {
+    try {
+      print('🚨 Performing emergency database reset...');
+
+      // Close existing database
+      if (_database != null) {
+        await _database!.close();
+        _database = null;
+      }
+
+      // Delete the database file
+      String path = join(await getDatabasesPath(), _databaseName);
+      await deleteDatabase(path);
+
+      print('✅ Database reset completed - will recreate on next access');
+    } catch (e) {
+      print('❌ Emergency reset failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Check if database is corrupted
+  Future<bool> isDatabaseHealthy() async {
+    try {
+      final db = await database;
+
+      // Try a simple query
+      await db.rawQuery('SELECT sqlite_version()');
+
+      // Check if critical tables exist
+      final tables = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table'",
+      );
+
+      final tableNames = tables.map((t) => t['name'] as String).toSet();
+      final requiredTables = {
+        'transactions',
+        'wallets',
+        'categories',
+        'description_history',
+      };
+
+      return requiredTables.every((table) => tableNames.contains(table));
+    } catch (e) {
+      print('❌ Database health check failed: $e');
+      return false;
+    }
+  }
+
+  // ============ ENHANCED TRANSACTIONS METHODS ============
+
+>>>>>>> Stashed changes
   Future<void> saveTransactionLocally(
     TransactionModel transaction, {
     int syncStatus = 0,
