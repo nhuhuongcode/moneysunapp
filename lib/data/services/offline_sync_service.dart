@@ -535,15 +535,135 @@ class OfflineSyncService extends ChangeNotifier {
     });
   }
 
+  Future<List<String>> getDescriptionSuggestions(
+    String userId, {
+    int limit = 10,
+    String? query,
+    TransactionType? type,
+  }) async {
+    try {
+      // Get from local database first (fast)
+      final localSuggestions = await _localDb.getSmartDescriptionSuggestions(
+        userId,
+        limit: limit,
+        query: query,
+        type: type?.name,
+      );
+
+      if (localSuggestions.isNotEmpty) {
+        return localSuggestions;
+      }
+
+      // Fallback to basic method if no smart suggestions
+      return await _localDb.getDescriptionSuggestions(userId, limit: limit);
+    } catch (e) {
+      print('❌ Error getting description suggestions: $e');
+      return [];
+    }
+  }
+
+  /// Search description history with advanced features
+  Future<List<String>> searchDescriptionHistory(
+    String userId,
+    String query, {
+    int limit = 5,
+    TransactionType? type,
+    bool fuzzySearch = true,
+  }) async {
+    if (query.trim().isEmpty) return [];
+
+    try {
+      return await _localDb.searchDescriptionHistory(
+        userId,
+        query.trim(),
+        limit: limit,
+        type: type?.name,
+        fuzzySearch: fuzzySearch,
+      );
+    } catch (e) {
+      print("❌ Error searching description history: $e");
+      return [];
+    }
+  }
+
+  /// Save description with context (transaction type, category, amount range)
+  Future<void> saveDescriptionWithContext(
+    String userId,
+    String description, {
+    TransactionType? type,
+    String? categoryId,
+    double? amount,
+  }) async {
+    if (description.trim().isEmpty) return;
+
+    try {
+      // Save to local database with context
+      await _localDb.saveDescriptionWithContext(
+        userId,
+        description.trim(),
+        type: type?.name,
+        categoryId: categoryId,
+        amount: amount,
+      );
+
+      // Also save to Firebase for sync
+      if (isOnline) {
+        try {
+          await _dbRef.child('user_descriptions').child(userId).update({
+            description.trim(): {
+              'count': ServerValue.increment(1),
+              'lastUsed': ServerValue.timestamp,
+              'type': type?.name,
+              'categoryId': categoryId,
+              'amount': amount,
+            },
+          });
+        } catch (e) {
+          print("⚠️ Warning: Failed to sync description to Firebase: $e");
+        }
+      }
+    } catch (e) {
+      print("❌ Error saving description with context: $e");
+    }
+  }
+
+  /// Get contextual suggestions based on current transaction
+  Future<List<String>> getContextualSuggestions(
+    String userId, {
+    TransactionType? type,
+    String? categoryId,
+    double? amount,
+    int limit = 5,
+  }) async {
+    try {
+      return await _localDb.getContextualSuggestions(
+        userId,
+        type: type?.name,
+        categoryId: categoryId,
+        amount: amount,
+        limit: limit,
+      );
+    } catch (e) {
+      print("❌ Error getting contextual suggestions: $e");
+      return [];
+    }
+  }
+
   // ============ CLEANUP ============
 
   @override
   void dispose() {
-    print('🧹 Disposing Enhanced Offline Sync Service...');
+    print('Disposing Enhanced Offline Sync Service...');
     _connectivitySubscription?.cancel();
     _firebaseConnectionSubscription?.cancel();
     _syncTimer?.cancel();
     _retryTimer?.cancel();
     super.dispose();
   }
+
+  Future getTransactions({
+    required String userId,
+    required DateTime startDate,
+    required DateTime endDate,
+  }) async {}
 }

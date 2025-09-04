@@ -744,133 +744,605 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Smart Autocomplete với enhanced features
           Autocomplete<String>(
             optionsBuilder: (TextEditingValue textEditingValue) async {
-              if (textEditingValue.text.isEmpty) {
-                return _descriptionHistory.take(5);
-              }
-
               final userId = FirebaseAuth.instance.currentUser?.uid;
-              if (userId != null) {
-                // NEW: Use sync service for search
-                final suggestions = await _syncService.searchDescriptionHistory(
-                  userId,
-                  textEditingValue.text,
-                );
-                return suggestions;
+              if (userId == null) return <String>[];
+
+              if (textEditingValue.text.isEmpty) {
+                // Return contextual and recent suggestions when empty
+                final contextualSuggestions = await _syncService
+                    .getContextualSuggestions(
+                      userId,
+                      type: _selectedType,
+                      categoryId: _selectedCategoryId,
+                      amount: double.tryParse(_amountController.text),
+                      limit: 3,
+                    );
+
+                final recentSuggestions = await _syncService
+                    .getDescriptionSuggestions(
+                      userId,
+                      limit: 5,
+                      type: _selectedType,
+                    );
+
+                // Combine and deduplicate
+                final combined = <String>{
+                  ...contextualSuggestions,
+                  ...recentSuggestions,
+                }.toList();
+
+                return combined.take(8);
               }
 
-              return _descriptionHistory
-                  .where(
-                    (desc) => desc.toLowerCase().contains(
-                      textEditingValue.text.toLowerCase(),
-                    ),
-                  )
-                  .take(5);
+              // Advanced search with fuzzy matching
+              final searchResults = await _syncService.searchDescriptionHistory(
+                userId,
+                textEditingValue.text,
+                limit: 6,
+                type: _selectedType,
+                fuzzySearch: true,
+              );
+
+              return searchResults;
             },
             onSelected: (String selection) {
               _descriptionController.text = selection;
+
+              // Save usage for learning (async without blocking UI)
+              _saveDescriptionUsage(selection);
             },
             fieldViewBuilder:
                 (context, controller, focusNode, onEditingComplete) {
-                  _descriptionController.text = controller.text;
+                  // Sync với controller chính
+                  controller.text = _descriptionController.text;
+                  controller.selection = _descriptionController.selection;
 
                   return TextFormField(
                     controller: controller,
                     focusNode: focusNode,
                     onEditingComplete: onEditingComplete,
                     decoration: InputDecoration(
-                      hintText: 'Nhập mô tả...',
+                      hintText: _getHintTextByType(),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: Colors.grey.shade300),
                       ),
-                      prefixIcon: const Icon(Icons.description_outlined),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(
+                          color: Theme.of(context).colorScheme.primary,
+                          width: 2,
+                        ),
+                      ),
+                      prefixIcon: Icon(
+                        _getIconByType(),
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
                       suffixIcon: controller.text.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear),
-                              onPressed: () {
-                                controller.clear();
-                                _descriptionController.clear();
-                              },
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // Smart learning indicator
+                                Tooltip(
+                                  message:
+                                      'Mô tả này sẽ được học để gợi ý tương lai',
+                                  child: Icon(
+                                    Icons.psychology,
+                                    color: Colors.purple.shade400,
+                                    size: 18,
+                                  ),
+                                ),
+                                // Clear button
+                                IconButton(
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: () {
+                                    controller.clear();
+                                    _descriptionController.clear();
+                                    setState(() {});
+                                  },
+                                  tooltip: 'Xóa',
+                                ),
+                              ],
                             )
                           : null,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      filled: true,
+                      fillColor: Theme.of(
+                        context,
+                      ).colorScheme.surface.withOpacity(0.5),
                     ),
                     maxLines: 2,
+                    maxLength: 100,
+                    textCapitalization: TextCapitalization.sentences,
+                    textInputAction: TextInputAction.done,
                     onChanged: (value) {
+                      // Sync với external controller
                       _descriptionController.text = value;
+                      _descriptionController.selection = controller.selection;
+                      setState(() {}); // Rebuild để update character count
+                    },
+                    onFieldSubmitted: (value) {
+                      if (value.trim().isNotEmpty) {
+                        _saveDescriptionUsage(value.trim());
+                      }
                     },
                   );
                 },
             optionsViewBuilder: (context, onSelected, options) {
-              return Align(
-                alignment: Alignment.topLeft,
-                child: Material(
-                  elevation: 4.0,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    constraints: const BoxConstraints(maxHeight: 200),
-                    width: MediaQuery.of(context).size.width - 32,
-                    child: ListView.builder(
-                      padding: const EdgeInsets.all(8.0),
-                      shrinkWrap: true,
-                      itemCount: options.length,
-                      itemBuilder: (context, index) {
-                        final option = options.elementAt(index);
-                        return ListTile(
-                          dense: true,
-                          leading: const Icon(
-                            Icons.history,
-                            size: 18,
-                            color: Colors.grey,
-                          ),
-                          title: Text(
-                            option,
-                            style: const TextStyle(fontSize: 14),
-                          ),
-                          onTap: () => onSelected(option),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              );
+              return _buildAdvancedOptionsView(context, onSelected, options);
             },
           ),
 
-          if (_descriptionHistory.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Text(
-              'Gợi ý nhanh:',
+          const SizedBox(height: 12),
+
+          // Context indicator và quick suggestions
+          _buildContextualInfo(),
+
+          const SizedBox(height: 12),
+
+          // Quick suggestion chips
+          _buildQuickSuggestionChips(),
+
+          const SizedBox(height: 8),
+
+          // Statistics row
+          _buildStatisticsRow(),
+        ],
+      ),
+    );
+  }
+
+  // Helper method để get hint text dựa trên transaction type
+  String _getHintTextByType() {
+    switch (_selectedType) {
+      case TransactionType.income:
+        return 'VD: Lương tháng 11, Thưởng dự án, Bán hàng online...';
+      case TransactionType.expense:
+        return 'VD: Ăn trưa, Xăng xe, Mua quần áo...';
+      case TransactionType.transfer:
+        return 'VD: Chuyển tiền tiết kiệm, Nạp ví điện tử...';
+    }
+  }
+
+  // Helper method để get icon dựa trên transaction type
+  IconData _getIconByType() {
+    switch (_selectedType) {
+      case TransactionType.income:
+        return Icons.trending_up;
+      case TransactionType.expense:
+        return Icons.trending_down;
+      case TransactionType.transfer:
+        return Icons.swap_horiz;
+    }
+  }
+
+  // Advanced options view với visual indicators
+  Widget _buildAdvancedOptionsView(
+    BuildContext context,
+    Function(String) onSelected,
+    Iterable<String> options,
+  ) {
+    if (options.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Material(
+        elevation: 8.0,
+        borderRadius: BorderRadius.circular(12),
+        shadowColor: Colors.black.withOpacity(0.1),
+        child: Container(
+          constraints: const BoxConstraints(maxHeight: 320),
+          width: MediaQuery.of(context).size.width - 32,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade200),
+            color: Colors.white,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(12),
+                    topRight: Radius.circular(12),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.auto_awesome,
+                      color: Theme.of(context).colorScheme.primary,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Gợi ý thông minh',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).colorScheme.primary,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${options.length} kết quả',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.primary.withOpacity(0.7),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Options list
+              Flexible(
+                child: ListView.separated(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  shrinkWrap: true,
+                  itemCount: options.length,
+                  separatorBuilder: (context, index) => Divider(
+                    height: 1,
+                    color: Colors.grey.shade100,
+                    indent: 16,
+                    endIndent: 16,
+                  ),
+                  itemBuilder: (context, index) {
+                    final option = options.elementAt(index);
+                    final isContextual = _isContextualSuggestion(option);
+                    final isRecent = _isRecentSuggestion(option);
+
+                    return ListTile(
+                      dense: true,
+                      leading: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: _getSuggestionColor(
+                            isContextual,
+                            isRecent,
+                          ).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          _getSuggestionIcon(isContextual, isRecent),
+                          color: _getSuggestionColor(isContextual, isRecent),
+                          size: 16,
+                        ),
+                      ),
+                      title: Text(
+                        option,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: _buildSuggestionBadge(isContextual, isRecent),
+                      onTap: () => onSelected(option),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Context info hiển thị thông tin về transaction hiện tại
+  Widget _buildContextualInfo() {
+    if (_selectedType == null) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _getTypeColor().withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _getTypeColor().withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(_getIconByType(), color: _getTypeColor(), size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _getContextInfo(),
               style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey,
+                fontSize: 13,
+                color: _getTypeColor().withOpacity(0.8),
                 fontWeight: FontWeight.w500,
               ),
             ),
+          ),
+          if (_descriptionController.text.isNotEmpty)
+            Icon(Icons.check_circle, color: Colors.green.shade600, size: 16),
+        ],
+      ),
+    );
+  }
+
+  String _getContextInfo() {
+    final parts = <String>[];
+
+    switch (_selectedType) {
+      case TransactionType.income:
+        parts.add('Thu nhập');
+        break;
+      case TransactionType.expense:
+        parts.add('Chi tiêu');
+        break;
+      case TransactionType.transfer:
+        parts.add('Chuyển tiền');
+        break;
+    }
+
+    if (_selectedCategoryId != null) {
+      // You would get the actual category name here
+      parts.add('có danh mục');
+    }
+
+    final amount = double.tryParse(_amountController.text);
+    if (amount != null) {
+      parts.add(
+        '${NumberFormat.currency(locale: 'vi_VN', symbol: '₫').format(amount)}',
+      );
+    }
+
+    return 'AI đang gợi ý cho: ${parts.join(' • ')}';
+  }
+
+  Color _getTypeColor() {
+    switch (_selectedType) {
+      case TransactionType.income:
+        return Colors.green;
+      case TransactionType.expense:
+        return Colors.red;
+      case TransactionType.transfer:
+        return Colors.orange;
+    }
+  }
+
+  // Quick suggestion chips dựa trên context
+  Widget _buildQuickSuggestionChips() {
+    return FutureBuilder<List<String>>(
+      future: _loadQuickSuggestions(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        final suggestions = snapshot.data!;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.flash_on, size: 16, color: Colors.amber.shade600),
+                const SizedBox(width: 6),
+                Text(
+                  'Gợi ý nhanh:',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.amber.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 8),
             Wrap(
-              spacing: 8,
+              spacing: 6,
               runSpacing: 4,
-              children: _descriptionHistory.take(3).map((desc) {
+              children: suggestions.take(4).map((suggestion) {
                 return ActionChip(
-                  label: Text(desc, style: const TextStyle(fontSize: 12)),
+                  label: Text(suggestion, style: const TextStyle(fontSize: 12)),
                   onPressed: () {
-                    _descriptionController.text = desc;
+                    _descriptionController.text = suggestion;
+                    _saveDescriptionUsage(suggestion);
                     setState(() {});
+
+                    // Dismiss keyboard
+                    FocusScope.of(context).unfocus();
                   },
-                  backgroundColor: Theme.of(
-                    context,
-                  ).colorScheme.primary.withOpacity(0.1),
+                  backgroundColor: Colors.amber.shade50,
                   labelStyle: TextStyle(
-                    color: Theme.of(context).colorScheme.primary,
+                    color: Colors.amber.shade700,
+                    fontWeight: FontWeight.w500,
                   ),
+                  side: BorderSide(color: Colors.amber.shade200, width: 0.5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 );
               }).toList(),
             ),
           ],
-        ],
-      ),
+        );
+      },
     );
+  }
+
+  // Statistics row hiển thị thống kê
+  Widget _buildStatisticsRow() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        // Character count
+        if (_descriptionController.text.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blue.shade200, width: 0.5),
+            ),
+            child: Text(
+              '${_descriptionController.text.length}/100',
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.blue.shade700,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          )
+        else
+          const SizedBox.shrink(),
+
+        // AI learning indicator
+        if (_descriptionController.text.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.purple.shade50,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.purple.shade200, width: 0.5),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.psychology, color: Colors.purple.shade600, size: 12),
+                const SizedBox(width: 4),
+                Text(
+                  'AI đang học',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.purple.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  // Helper methods
+  Future<List<String>> _loadQuickSuggestions() async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return [];
+
+    try {
+      return await _syncService.getContextualSuggestions(
+        userId,
+        type: _selectedType,
+        categoryId: _selectedCategoryId,
+        amount: double.tryParse(_amountController.text),
+        limit: 4,
+      );
+    } catch (e) {
+      return [];
+    }
+  }
+
+  bool _isContextualSuggestion(String suggestion) {
+    // This would check if suggestion is from contextual suggestions
+    // For now, simple heuristic
+    return suggestion.length > 5; // Contextual suggestions tend to be longer
+  }
+
+  bool _isRecentSuggestion(String suggestion) {
+    // This would check if suggestion is from recent suggestions
+    return !_isContextualSuggestion(suggestion);
+  }
+
+  Color _getSuggestionColor(bool isContextual, bool isRecent) {
+    if (isContextual) return Colors.purple;
+    if (isRecent) return Colors.blue;
+    return Colors.grey;
+  }
+
+  IconData _getSuggestionIcon(bool isContextual, bool isRecent) {
+    if (isContextual) return Icons.auto_awesome;
+    if (isRecent) return Icons.history;
+    return Icons.description;
+  }
+
+  Widget? _buildSuggestionBadge(bool isContextual, bool isRecent) {
+    if (isContextual) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.purple.shade50,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.purple.shade200, width: 0.5),
+        ),
+        child: Text(
+          'Smart',
+          style: TextStyle(
+            fontSize: 10,
+            color: Colors.purple.shade700,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    if (isRecent) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.blue.shade50,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.blue.shade200, width: 0.5),
+        ),
+        child: Text(
+          'Gần đây',
+          style: TextStyle(
+            fontSize: 10,
+            color: Colors.blue.shade700,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    return null;
+  }
+
+  // Save description usage for AI learning
+  Future<void> _saveDescriptionUsage(String description) async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null || description.trim().isEmpty) return;
+
+    try {
+      await _syncService.saveDescriptionWithContext(
+        userId,
+        description.trim(),
+        type: _selectedType,
+        categoryId: _selectedCategoryId,
+        amount: double.tryParse(_amountController.text),
+      );
+
+      print('💾 Saved description with context for learning: $description');
+    } catch (e) {
+      print('⚠️ Failed to save description usage: $e');
+    }
   }
 
   void _showAddCategoryDialog() {
@@ -948,7 +1420,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     );
   }
 
-  // NEW: Enhanced submit form with offline-first approach and UI refresh
   Future<void> _submitForm() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -983,6 +1454,17 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         await _syncService.addTransactionOffline(transaction);
       }
 
+      // NEW: Save description with context for smart suggestions
+      if (_descriptionController.text.trim().isNotEmpty) {
+        await _syncService.saveDescriptionWithContext(
+          FirebaseAuth.instance.currentUser!.uid,
+          _descriptionController.text.trim(),
+          type: _selectedType,
+          categoryId: _selectedCategoryId,
+          amount: amount,
+        );
+      }
+
       // Show appropriate message based on sync status
       final syncProvider = Provider.of<SyncStatusProvider>(
         context,
@@ -1001,14 +1483,22 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 color: Colors.white,
               ),
               const SizedBox(width: 8),
-              Text(syncMessage),
+              Expanded(child: Text(syncMessage)),
+              // NEW: Show smart learning indicator
+              if (_descriptionController.text.trim().isNotEmpty)
+                Icon(
+                  Icons.psychology,
+                  color: Colors.white.withOpacity(0.8),
+                  size: 16,
+                ),
             ],
           ),
           backgroundColor: syncProvider.isOnline ? Colors.green : Colors.orange,
+          duration: const Duration(seconds: 3),
         ),
       );
 
-      // NEW: Return success flag to parent screen for UI refresh
+      // Return success flag to parent screen for UI refresh
       Navigator.pop(context, true);
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(

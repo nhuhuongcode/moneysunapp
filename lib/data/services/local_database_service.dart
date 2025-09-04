@@ -439,24 +439,6 @@ class LocalDatabaseService {
     return result.map((map) => map['description'] as String).toList();
   }
 
-  Future<List<String>> searchDescriptionHistory(
-    String userId,
-    String query, {
-    int limit = 5,
-  }) async {
-    final db = await database;
-
-    final result = await db.query(
-      'description_history',
-      where: 'userId = ? AND description LIKE ?',
-      whereArgs: [userId, '%$query%'],
-      orderBy: 'usageCount DESC, lastUsed DESC',
-      limit: limit,
-    );
-
-    return result.map((map) => map['description'] as String).toList();
-  }
-
   // ============ SYNC QUEUE MANAGEMENT ============
   Future<void> addToSyncQueue(
     String tableName,
@@ -638,5 +620,475 @@ class LocalDatabaseService {
       }),
       'user_id': 'system',
     });
+  }
+
+  Future<void> saveDescriptionWithContext(
+    String userId,
+    String description, {
+    String? type,
+    String? categoryId,
+    double? amount,
+  }) async {
+    if (description.trim().isEmpty) return;
+
+    final db = await database;
+
+    try {
+      // Check if description exists
+      final existing = await db.query(
+        'description_history',
+        where: 'userId = ? AND description = ?',
+        whereArgs: [userId, description.trim()],
+        limit: 1,
+      );
+
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+      if (existing.isNotEmpty) {
+        // Update existing entry
+        await db.update(
+          'description_history',
+          {
+            'usageCount': (existing.first['usageCount'] as int? ?? 0) + 1,
+            'lastUsed': now,
+            'type': type,
+            'categoryId': categoryId,
+            'amount': amount,
+            'updatedAt': now,
+          },
+          where: 'id = ?',
+          whereArgs: [existing.first['id']],
+        );
+      } else {
+        // Insert new entry
+        await db.insert('description_history', {
+          'userId': userId,
+          'description': description.trim(),
+          'usageCount': 1,
+          'lastUsed': now,
+          'type': type,
+          'categoryId': categoryId,
+          'amount': amount,
+          'createdAt': now,
+          'updatedAt': now,
+        });
+      }
+    } catch (e) {
+      print('Error saving description with context: $e');
+      rethrow;
+    }
+  }
+
+  /// Get smart description suggestions based on usage patterns
+  Future<List<String>> getSmartDescriptionSuggestions(
+    String userId, {
+    int limit = 10,
+    String? query,
+    String? type,
+  }) async {
+    final db = await database;
+
+    try {
+      String whereClause = 'userId = ?';
+      List<dynamic> whereArgs = [userId];
+
+      // Filter by transaction type if provided
+      if (type != null) {
+        whereClause += ' AND (type = ? OR type IS NULL)';
+        whereArgs.add(type);
+      }
+
+      // Filter by query if provided
+      if (query != null && query.isNotEmpty) {
+        whereClause += ' AND description LIKE ?';
+        whereArgs.add('%$query%');
+      }
+
+      final result = await db.query(
+        'description_history',
+        where: whereClause,
+        whereArgs: whereArgs,
+        orderBy:
+            '''
+          CASE 
+            WHEN lastUsed > ${DateTime.now().subtract(const Duration(days: 7)).millisecondsSinceEpoch ~/ 1000} THEN usageCount * 2
+            WHEN lastUsed > ${DateTime.now().subtract(const Duration(days: 30)).millisecondsSinceEpoch ~/ 1000} THEN usageCount * 1.5
+            ELSE usageCount 
+          END DESC, 
+          lastUsed DESC
+        ''',
+        limit: limit,
+      );
+
+      return result.map((map) => map['description'] as String).toList();
+    } catch (e) {
+      print('Error getting smart description suggestions: $e');
+      return [];
+    }
+  }
+
+  /// Advanced search with fuzzy matching and context awareness
+  Future<List<String>> searchDescriptionHistory(
+    String userId,
+    String query, {
+    int limit = 5,
+    String? type,
+    bool fuzzySearch = true,
+  }) async {
+    if (query.trim().isEmpty) return [];
+
+    final db = await database;
+
+    try {
+      String whereClause = 'userId = ?';
+      List<dynamic> whereArgs = [userId];
+
+      // Add type filter
+      if (type != null) {
+        whereClause += ' AND (type = ? OR type IS NULL)';
+        whereArgs.add(type);
+      }
+
+      List<String> results = [];
+
+      if (fuzzySearch) {
+        // First: Exact matches
+        final exactMatches = await db.query(
+          'description_history',
+          where: '$whereClause AND description LIKE ?',
+          whereArgs: [...whereArgs, '$query%'],
+          orderBy: 'usageCount DESC, lastUsed DESC',
+          limit: limit,
+        );
+        results.addAll(exactMatches.map((m) => m['description'] as String));
+
+        // Second: Contains matches (if we need more results)
+        if (results.length < limit) {
+          final containsMatches = await db.query(
+            'description_history',
+            where:
+                '$whereClause AND description LIKE ? AND description NOT LIKE ?',
+            whereArgs: [...whereArgs, '%$query%', '$query%'],
+            orderBy: 'usageCount DESC, lastUsed DESC',
+            limit: limit - results.length,
+          );
+          results.addAll(
+            containsMatches.map((m) => m['description'] as String),
+          );
+        }
+
+        // Third: Fuzzy matches using SOUNDEX or similar words
+        if (results.length < limit && query.length >= 3) {
+          final fuzzyMatches = await db.query(
+            'description_history',
+            where:
+                '''
+              $whereClause AND 
+              description NOT LIKE ? AND 
+              (
+                LENGTH(description) - LENGTH(REPLACE(LOWER(description), LOWER(?), '')) > 0 OR
+                SUBSTR(description, 1, 3) = SUBSTR(?, 1, 3)
+              )
+            ''',
+            whereArgs: [...whereArgs, '%$query%', query, query],
+            orderBy: 'usageCount DESC, lastUsed DESC',
+            limit: limit - results.length,
+          );
+          results.addAll(fuzzyMatches.map((m) => m['description'] as String));
+        }
+      } else {
+        // Simple search
+        final simpleMatches = await db.query(
+          'description_history',
+          where: '$whereClause AND description LIKE ?',
+          whereArgs: [...whereArgs, '%$query%'],
+          orderBy: 'usageCount DESC, lastUsed DESC',
+          limit: limit,
+        );
+        results.addAll(simpleMatches.map((m) => m['description'] as String));
+      }
+
+      // Remove duplicates while preserving order
+      return results.toSet().toList().take(limit).toList();
+    } catch (e) {
+      print('Error in advanced description search: $e');
+      return [];
+    }
+  }
+
+  /// Get contextual suggestions based on similar transactions
+  Future<List<String>> getContextualSuggestions(
+    String userId, {
+    String? type,
+    String? categoryId,
+    double? amount,
+    int limit = 5,
+  }) async {
+    final db = await database;
+
+    try {
+      String whereClause = 'userId = ?';
+      List<dynamic> whereArgs = [userId];
+
+      // Build context-aware query
+      List<String> conditions = [];
+
+      if (type != null) {
+        conditions.add('type = ?');
+        whereArgs.add(type);
+      }
+
+      if (categoryId != null) {
+        conditions.add('categoryId = ?');
+        whereArgs.add(categoryId);
+      }
+
+      if (amount != null) {
+        // Find descriptions used for similar amounts (within 20% range)
+        final minAmount = amount * 0.8;
+        final maxAmount = amount * 1.2;
+        conditions.add('amount BETWEEN ? AND ?');
+        whereArgs.addAll([minAmount, maxAmount]);
+      }
+
+      if (conditions.isNotEmpty) {
+        whereClause += ' AND (${conditions.join(' OR ')})';
+      }
+
+      // FIX: Use proper SQL query without orderByArgs
+      String orderByClause;
+      if (type != null && categoryId != null) {
+        orderByClause =
+            '''
+          CASE
+            WHEN type = '$type' AND categoryId = '$categoryId' THEN usageCount * 3
+            WHEN type = '$type' THEN usageCount * 2
+            WHEN categoryId = '$categoryId' THEN usageCount * 1.5
+            ELSE usageCount
+          END DESC,
+          lastUsed DESC
+        ''';
+      } else if (type != null) {
+        orderByClause =
+            '''
+          CASE
+            WHEN type = '$type' THEN usageCount * 2
+            ELSE usageCount
+          END DESC,
+          lastUsed DESC
+        ''';
+      } else if (categoryId != null) {
+        orderByClause =
+            '''
+          CASE
+            WHEN categoryId = '$categoryId' THEN usageCount * 2
+            ELSE usageCount
+          END DESC,
+          lastUsed DESC
+        ''';
+      } else {
+        orderByClause = 'usageCount DESC, lastUsed DESC';
+      }
+
+      final result = await db.query(
+        'description_history',
+        where: whereClause,
+        whereArgs: whereArgs,
+        orderBy: orderByClause,
+        limit: limit,
+      );
+
+      return result.map((map) => map['description'] as String).toList();
+    } catch (e) {
+      print('Error getting contextual suggestions: $e');
+      return [];
+    }
+  }
+
+  /// Get trending descriptions (most used in recent period)
+  Future<List<String>> getTrendingDescriptions(
+    String userId, {
+    int days = 30,
+    int limit = 10,
+    String? type,
+  }) async {
+    final db = await database;
+
+    try {
+      final cutoffTime =
+          DateTime.now()
+              .subtract(Duration(days: days))
+              .millisecondsSinceEpoch ~/
+          1000;
+
+      String whereClause = 'userId = ? AND lastUsed > ?';
+      List<dynamic> whereArgs = [userId, cutoffTime];
+
+      if (type != null) {
+        whereClause += ' AND (type = ? OR type IS NULL)';
+        whereArgs.add(type);
+      }
+
+      final result = await db.query(
+        'description_history',
+        where: whereClause,
+        whereArgs: whereArgs,
+        orderBy: 'usageCount DESC, lastUsed DESC',
+        limit: limit,
+      );
+
+      return result.map((map) => map['description'] as String).toList();
+    } catch (e) {
+      print('Error getting trending descriptions: $e');
+      return [];
+    }
+  }
+
+  /// Clean up old description entries to maintain performance
+  Future<void> cleanupDescriptionHistory(
+    String userId, {
+    int keepDays = 365,
+  }) async {
+    final db = await database;
+
+    try {
+      final cutoffTime =
+          DateTime.now()
+              .subtract(Duration(days: keepDays))
+              .millisecondsSinceEpoch ~/
+          1000;
+
+      // Keep frequently used descriptions even if old
+      await db.delete(
+        'description_history',
+        where: 'userId = ? AND lastUsed < ? AND usageCount < 5',
+        whereArgs: [userId, cutoffTime],
+      );
+
+      print('✅ Cleaned up old description history');
+    } catch (e) {
+      print('Error cleaning up description history: $e');
+    }
+  }
+
+  /// Get description statistics for debugging/analytics
+  Future<Map<String, dynamic>> getDescriptionStats(String userId) async {
+    final db = await database;
+
+    try {
+      final totalCount = await db.query(
+        'description_history',
+        where: 'userId = ?',
+        whereArgs: [userId],
+      );
+
+      final recentCount = await db.query(
+        'description_history',
+        where: 'userId = ? AND lastUsed > ?',
+        whereArgs: [
+          userId,
+          DateTime.now()
+                  .subtract(const Duration(days: 30))
+                  .millisecondsSinceEpoch ~/
+              1000,
+        ],
+      );
+
+      final topUsed = await db.query(
+        'description_history',
+        where: 'userId = ?',
+        whereArgs: [userId],
+        orderBy: 'usageCount DESC',
+        limit: 5,
+      );
+
+      return {
+        'totalDescriptions': totalCount.length,
+        'recentDescriptions': recentCount.length,
+        'topUsedDescriptions': topUsed
+            .map(
+              (m) => {
+                'description': m['description'],
+                'count': m['usageCount'],
+              },
+            )
+            .toList(),
+      };
+    } catch (e) {
+      print('Error getting description stats: $e');
+      return {};
+    }
+  }
+
+  // ============ ENHANCED DATABASE SCHEMA ============
+
+  // Update the _createTables method to include new columns
+  Future<void> _createEnhancedDescriptionTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS description_history_enhanced (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId TEXT NOT NULL,
+        description TEXT NOT NULL,
+        usageCount INTEGER DEFAULT 1,
+        lastUsed INTEGER DEFAULT (strftime('%s', 'now')),
+        createdAt INTEGER DEFAULT (strftime('%s', 'now')),
+        updatedAt INTEGER DEFAULT (strftime('%s', 'now')),
+        
+        -- Context information
+        type TEXT, -- 'income', 'expense', 'transfer'
+        categoryId TEXT,
+        amount REAL,
+        
+        -- Performance indexes
+        UNIQUE(userId, description),
+        INDEX(userId, type),
+        INDEX(userId, categoryId),
+        INDEX(userId, lastUsed),
+        INDEX(userId, usageCount),
+        INDEX(description)
+      )
+    ''');
+  }
+
+  // Migrate existing data if needed
+  Future<void> migrateDescriptionHistory() async {
+    final db = await database;
+
+    try {
+      // Check if old table exists
+      final tables = await db.query(
+        'sqlite_master',
+        where: 'type = ? AND name = ?',
+        whereArgs: ['table', 'description_history'],
+      );
+
+      if (tables.isNotEmpty) {
+        // Check if new columns exist
+        final columns = await db.rawQuery(
+          'PRAGMA table_info(description_history)',
+        );
+        final hasTypeColumn = columns.any((col) => col['name'] == 'type');
+
+        if (!hasTypeColumn) {
+          // Add new columns to existing table
+          await db.execute(
+            'ALTER TABLE description_history ADD COLUMN type TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE description_history ADD COLUMN categoryId TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE description_history ADD COLUMN amount REAL',
+          );
+          await db.execute(
+            'ALTER TABLE description_history ADD COLUMN updatedAt INTEGER DEFAULT (strftime(\'%s\', \'now\'))',
+          );
+
+          print('✅ Migrated description_history table with new columns');
+        }
+      }
+    } catch (e) {
+      print('Error migrating description history: $e');
+    }
   }
 }
