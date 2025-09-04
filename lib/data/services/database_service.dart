@@ -12,6 +12,7 @@ import 'package:moneysun/data/services/local_database_service.dart';
 import 'package:async/async.dart';
 import 'package:collection/collection.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:moneysun/data/services/offline_sync_service.dart';
 
 class DatabaseService {
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
@@ -127,61 +128,133 @@ class DatabaseService {
     });
   }
 
-  // FIX: addTransaction - Sửa logic cho income transaction
+  // Future<void> addTransaction(TransactionModel transaction) async {
+  //   if (_uid == null) return;
+  //   try {
+  //     // 1. Lưu giao dịch vào database
+  //     final newTransactionRef = _dbRef.child('transactions').push();
+  //     final transactionWithId = TransactionModel(
+  //       id: newTransactionRef.key!,
+  //       amount: transaction.amount,
+  //       type: transaction.type,
+  //       categoryId: transaction.categoryId,
+  //       walletId: transaction.walletId,
+  //       date: transaction.date,
+  //       description: transaction.description,
+  //       userId: transaction.userId,
+  //       subCategoryId: transaction.subCategoryId,
+  //       transferToWalletId: transaction.transferToWalletId,
+  //     );
+  //     await newTransactionRef.set(transaction.toJson());
+
+  //     // 2. FIX: Cập nhật số dư của ví tương ứng
+  //     final walletRef = _dbRef.child('wallets').child(transaction.walletId);
+  //     final walletSnapshot = await walletRef.get();
+
+  //     if (walletSnapshot.exists) {
+  //       double balanceChange = 0;
+
+  //       switch (transaction.type) {
+  //         case TransactionType.income:
+  //           balanceChange = transaction.amount; // CỘNG cho thu nhập
+  //           break;
+  //         case TransactionType.expense:
+  //           balanceChange = -transaction.amount; // TRỪ cho chi tiêu
+  //           break;
+  //         case TransactionType.transfer:
+  //           balanceChange =
+  //               -transaction.amount; // TRỪ cho transfer (từ ví nguồn)
+  //           break;
+  //       }
+
+  //       await walletRef
+  //           .child('balance')
+  //           .set(ServerValue.increment(balanceChange));
+  //     }
+
+  //     await _localDb.saveTransactionLocally(transactionWithId, syncStatus: 1);
+
+  //     if (transaction.description.isNotEmpty) {
+  //       await _localDb.saveDescriptionToHistory(_uid!, transaction.description);
+  //     }
+  //   } catch (e) {
+  //     if (transaction.description.isNotEmpty) {
+  //       await _localDb.saveDescriptionToHistory(_uid!, transaction.description);
+  //     }
+  //     print("❌ Error adding transaction: $e");
+  //     rethrow;
+  //   }
+  // }
+
   Future<void> addTransaction(TransactionModel transaction) async {
     if (_uid == null) return;
+
     try {
-      // 1. Lưu giao dịch vào database
-      final newTransactionRef = _dbRef.child('transactions').push();
-      final transactionWithId = TransactionModel(
-        id: newTransactionRef.key!,
-        amount: transaction.amount,
-        type: transaction.type,
-        categoryId: transaction.categoryId,
-        walletId: transaction.walletId,
-        date: transaction.date,
-        description: transaction.description,
-        userId: transaction.userId,
-        subCategoryId: transaction.subCategoryId,
-        transferToWalletId: transaction.transferToWalletId,
-      );
-      await newTransactionRef.set(transaction.toJson());
+      // 1. Luôn lưu local trước (offline-first)
+      await _localDb.saveTransactionLocally(transaction, syncStatus: 0);
 
-      // 2. FIX: Cập nhật số dư của ví tương ứng
-      final walletRef = _dbRef.child('wallets').child(transaction.walletId);
-      final walletSnapshot = await walletRef.get();
-
-      if (walletSnapshot.exists) {
-        double balanceChange = 0;
-
-        switch (transaction.type) {
-          case TransactionType.income:
-            balanceChange = transaction.amount; // CỘNG cho thu nhập
-            break;
-          case TransactionType.expense:
-            balanceChange = -transaction.amount; // TRỪ cho chi tiêu
-            break;
-          case TransactionType.transfer:
-            balanceChange =
-                -transaction.amount; // TRỪ cho transfer (từ ví nguồn)
-            break;
-        }
-
-        await walletRef
-            .child('balance')
-            .set(ServerValue.increment(balanceChange));
-      }
-
-      await _localDb.saveTransactionLocally(transactionWithId, syncStatus: 1);
-
+      // 2. Lưu description vào history
       if (transaction.description.isNotEmpty) {
         await _localDb.saveDescriptionToHistory(_uid!, transaction.description);
       }
+
+      // 3. Thử sync ngay nếu online (thông qua Enhanced Sync Service)
+      final syncService = OfflineSyncService();
+      await syncService.addTransactionOffline(transaction);
+
+      print('✅ Transaction added offline-first: ${transaction.id}');
     } catch (e) {
-      if (transaction.description.isNotEmpty) {
-        await _localDb.saveDescriptionToHistory(_uid!, transaction.description);
-      }
-      print("❌ Error adding transaction: $e");
+      print("❌ Error adding transaction offline: $e");
+      rethrow;
+    }
+  }
+
+  Future<void> addWalletOffline(
+    String name,
+    double initialBalance,
+    String ownerId,
+  ) async {
+    if (_uid == null) return;
+
+    try {
+      final newWallet = Wallet(
+        id: DateTime.now().millisecondsSinceEpoch.toString(), // Tạo ID tạm thời
+        name: name,
+        balance: initialBalance,
+        ownerId: ownerId,
+        isVisibleToPartner: true,
+      );
+
+      // Offline-first approach
+      final syncService = OfflineSyncService();
+      await syncService.addWalletOffline(newWallet);
+
+      print('✅ Wallet added offline-first: ${newWallet.id}');
+    } catch (e) {
+      print("❌ Error adding wallet offline: $e");
+      rethrow;
+    }
+  }
+
+  // Thêm method mới cho offline-first category
+  Future<void> addCategoryOffline(String name, String type) async {
+    if (_uid == null) return;
+
+    try {
+      final newCategory = Category(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        name: name,
+        ownerId: _uid!,
+        type: type,
+      );
+
+      // Offline-first approach
+      final syncService = OfflineSyncService();
+      await syncService.addCategoryOffline(newCategory);
+
+      print('✅ Category added offline-first: ${newCategory.id}');
+    } catch (e) {
+      print("❌ Error adding category offline: $e");
       rethrow;
     }
   }

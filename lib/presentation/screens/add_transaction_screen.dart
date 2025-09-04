@@ -1,3 +1,5 @@
+// lib/presentation/screens/add_transaction_screen.dart - UPDATED VERSION
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
@@ -5,8 +7,9 @@ import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
+import 'package:moneysun/data/providers/sync_status_provider.dart'; // NEW
 import 'package:moneysun/data/services/database_service.dart';
-import 'package:moneysun/data/services/offline_sync_service.dart';
+import 'package:moneysun/data/services/offline_sync_service.dart'; // NEW
 import 'package:moneysun/presentation/screens/transfer_screen.dart';
 import 'package:provider/provider.dart';
 
@@ -24,7 +27,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   final _amountController = TextEditingController();
   final _descriptionController = TextEditingController();
   final DatabaseService _databaseService = DatabaseService();
-  final OfflineSyncService _offlineSyncService = OfflineSyncService();
+  final OfflineSyncService _syncService = OfflineSyncService(); // NEW
 
   TransactionType _selectedType = TransactionType.expense;
   String? _selectedWalletId;
@@ -32,38 +35,16 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   String? _selectedSubCategoryId;
   DateTime _selectedDate = DateTime.now();
 
-  bool _isOnline = false;
-  final LayerLink _layerLink = LayerLink();
-  OverlayEntry? _overlayEntry;
-  List<String> _filteredSuggestions = [];
-
   bool _isLoading = false;
   List<String> _descriptionHistory = [];
 
   @override
   void initState() {
     super.initState();
-    _initializeServices();
     _loadDescriptionHistory();
     if (widget.transactionToEdit != null) {
       _populateFieldsForEdit();
     }
-  }
-
-  Future<void> _initializeServices() async {
-    await _offlineSyncService.initialize();
-    setState(() {
-      _isOnline = _offlineSyncService.isOnline;
-    });
-
-    // Listen to connectivity changes
-    _offlineSyncService.addListener(() {
-      if (mounted) {
-        setState(() {
-          _isOnline = _offlineSyncService.isOnline;
-        });
-      }
-    });
   }
 
   void _populateFieldsForEdit() {
@@ -80,7 +61,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   Future<void> _loadDescriptionHistory() async {
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId != null) {
-      final history = await _offlineSyncService.getDescriptionSuggestions(
+      // NEW: Use sync service for offline-first description history
+      final history = await _syncService.getDescriptionSuggestions(
         userId,
         limit: 10,
       );
@@ -93,6 +75,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   @override
   Widget build(BuildContext context) {
     final userProvider = Provider.of<UserProvider>(context);
+    final syncProvider = Provider.of<SyncStatusProvider>(context); // NEW
 
     return Scaffold(
       appBar: AppBar(
@@ -114,37 +97,45 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               ),
             ),
             const SizedBox(width: 8),
-            const SizedBox(width: 8),
-            // THÊM MỚI: Connection status indicator
+
+            // NEW: Enhanced connection status with sync provider
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                color: _isOnline ? Colors.green : Colors.orange,
+                color: syncProvider.isOnline ? Colors.green : Colors.orange,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    _isOnline ? Icons.cloud_done : Icons.cloud_off,
+                    syncProvider.isOnline ? Icons.cloud_done : Icons.cloud_off,
                     size: 16,
                     color: Colors.white,
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    _isOnline ? 'Online' : 'Offline',
+                    syncProvider.isOnline ? 'Online' : 'Offline',
                     style: const TextStyle(
                       fontSize: 12,
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
+                  // NEW: Show pending count when offline
+                  if (!syncProvider.isOnline &&
+                      syncProvider.pendingCount > 0) ...[
+                    const SizedBox(width: 4),
+                    Text(
+                      '(${syncProvider.pendingCount})',
+                      style: const TextStyle(fontSize: 10, color: Colors.white),
+                    ),
+                  ],
                 ],
               ),
             ),
           ],
         ),
-
         actions: [
           IconButton(
             icon: const Icon(Icons.swap_horiz),
@@ -163,12 +154,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           Form(
             key: _formKey,
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(
-                16.0,
-                16.0,
-                16.0,
-                80.0,
-              ), // Thêm padding bottom để tránh che khuất
+              padding: const EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 80.0),
               children: [
                 _buildTransactionTypeSelector(),
                 const SizedBox(height: 16),
@@ -188,7 +174,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               ],
             ),
           ),
-          // Nút hoàn thành cố định ở dưới cùng
+
+          // Fixed bottom button
           Positioned(
             left: 0,
             right: 0,
@@ -236,6 +223,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     );
   }
 
+  // ... (Giữ nguyên tất cả các build methods khác: _buildCard, _buildTransactionTypeSelector, etc.)
+
   Widget _buildCard({required String title, required Widget child}) {
     return Card(
       elevation: 0,
@@ -260,7 +249,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     );
   }
 
-  // Cập nhật style cho transaction type selector
   Widget _buildTransactionTypeSelector() {
     return _buildCard(
       title: 'Loại giao dịch',
@@ -420,33 +408,20 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 const SizedBox(height: 8),
                 ElevatedButton.icon(
                   onPressed: () {
-                    // TODO: Implement navigation to add wallet screen
-                    // Navigator.push(context, MaterialPageRoute(...));
+                    // Navigate to add wallet screen
                   },
                   icon: const Icon(Icons.add),
                   label: const Text('Tạo ví mới'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
                 ),
               ],
             );
           }
 
-          // Main dropdown for wallet selection
           return Column(
             children: [
               DropdownButtonFormField<String>(
                 value: _selectedWalletId,
-                isExpanded: true, // Ensures the dropdown takes full width
+                isExpanded: true,
                 decoration: InputDecoration(
                   prefixIcon: Icon(
                     Icons.account_balance_wallet_outlined,
@@ -474,7 +449,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   hintText: 'Chọn ví',
                 ),
                 items: wallets.map((wallet) {
-                  // Customize display for each wallet type
                   String displayName = wallet.name;
                   IconData icon;
                   Widget? trailing;
@@ -522,19 +496,13 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   }
                   return null;
                 },
-                icon: Icon(
-                  Icons.arrow_drop_down,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
               ),
               const SizedBox(height: 8),
-              // Add wallet button
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton.icon(
                   onPressed: () {
-                    // TODO: Implement navigation to add wallet screen
-                    // Navigator.push(context, MaterialPageRoute(...));
+                    // Navigate to add wallet screen
                   },
                   icon: Icon(
                     Icons.add,
@@ -556,7 +524,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     );
   }
 
-  // FIX: Category selector riêng biệt cho income và expense
   Widget _buildCategorySelector() {
     return _buildCard(
       title: _selectedType == TransactionType.income
@@ -573,7 +540,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
           final categories = snapshot.data!;
 
-          // Nếu là income mà không có category nào
           if (_selectedType == TransactionType.income && categories.isEmpty) {
             return Column(
               children: [
@@ -609,10 +575,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 onChanged: (value) {
                   setState(() {
                     _selectedCategoryId = value;
-                    _selectedSubCategoryId = null; // Reset sub category
+                    _selectedSubCategoryId = null;
                   });
                 },
-                // FIX: Category không bắt buộc cho income
                 validator: _selectedType == TransactionType.expense
                     ? (value) {
                         if (value == null) {
@@ -719,31 +684,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             initialDate: _selectedDate,
             firstDate: DateTime(2020),
             lastDate: DateTime.now().add(const Duration(days: 365)),
-            builder: (context, child) {
-              return Theme(
-                data: Theme.of(context).copyWith(
-                  colorScheme: ColorScheme.light(
-                    primary: Theme.of(context).colorScheme.primary,
-                  ),
-                ),
-                child: child!,
-              );
-            },
           );
           if (date != null) {
             final time = await showTimePicker(
               context: context,
               initialTime: TimeOfDay.fromDateTime(_selectedDate),
-              builder: (context, child) {
-                return Theme(
-                  data: Theme.of(context).copyWith(
-                    colorScheme: ColorScheme.light(
-                      primary: Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                  child: child!,
-                );
-              },
             );
             setState(() {
               _selectedDate = DateTime(
@@ -799,18 +744,19 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // THAY ĐỔI: Sử dụng Autocomplete widget
           Autocomplete<String>(
             optionsBuilder: (TextEditingValue textEditingValue) async {
               if (textEditingValue.text.isEmpty) {
                 return _descriptionHistory.take(5);
               }
 
-              // THÊM MỚI: Search trong local database
               final userId = FirebaseAuth.instance.currentUser?.uid;
               if (userId != null) {
-                final suggestions = await _offlineSyncService
-                    .searchDescriptionHistory(userId, textEditingValue.text);
+                // NEW: Use sync service for search
+                final suggestions = await _syncService.searchDescriptionHistory(
+                  userId,
+                  textEditingValue.text,
+                );
                 return suggestions;
               }
 
@@ -827,7 +773,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             },
             fieldViewBuilder:
                 (context, controller, focusNode, onEditingComplete) {
-                  // Sync với controller chính
                   _descriptionController.text = controller.text;
 
                   return TextFormField(
@@ -883,9 +828,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                             style: const TextStyle(fontSize: 14),
                           ),
                           onTap: () => onSelected(option),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(4),
-                          ),
                         );
                       },
                     ),
@@ -895,7 +837,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             },
           ),
 
-          // THÊM MỚI: Quick access chips for recent descriptions
           if (_descriptionHistory.isNotEmpty) ...[
             const SizedBox(height: 12),
             const Text(
@@ -915,7 +856,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   label: Text(desc, style: const TextStyle(fontSize: 12)),
                   onPressed: () {
                     _descriptionController.text = desc;
-                    // Trigger autocomplete update
                     setState(() {});
                   },
                   backgroundColor: Theme.of(
@@ -1008,6 +948,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     );
   }
 
+  // NEW: Enhanced submit form with offline-first approach and UI refresh
   Future<void> _submitForm() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -1032,18 +973,22 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       );
 
       if (widget.transactionToEdit != null) {
-        // CẬP NHẬT: Use online service for updates
+        // For updates, use DatabaseService (requires online)
         await _databaseService.updateTransaction(
           transaction,
           widget.transactionToEdit!,
         );
       } else {
-        // THAY ĐỔI: Use offline-first for new transactions
-        await _offlineSyncService.addTransaction(transaction);
+        // NEW: For new transactions, use offline-first approach
+        await _syncService.addTransactionOffline(transaction);
       }
 
-      // Hiển thị trạng thái sync
-      final syncMessage = _isOnline
+      // Show appropriate message based on sync status
+      final syncProvider = Provider.of<SyncStatusProvider>(
+        context,
+        listen: false,
+      );
+      final syncMessage = syncProvider.isOnline
           ? 'Đã thêm giao dịch và đồng bộ'
           : 'Đã lưu giao dịch (sẽ đồng bộ khi có mạng)';
 
@@ -1052,18 +997,19 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           content: Row(
             children: [
               Icon(
-                _isOnline ? Icons.cloud_done : Icons.cloud_off,
+                syncProvider.isOnline ? Icons.cloud_done : Icons.cloud_off,
                 color: Colors.white,
               ),
               const SizedBox(width: 8),
               Text(syncMessage),
             ],
           ),
-          backgroundColor: _isOnline ? Colors.green : Colors.orange,
+          backgroundColor: syncProvider.isOnline ? Colors.green : Colors.orange,
         ),
       );
 
-      Navigator.pop(context);
+      // NEW: Return success flag to parent screen for UI refresh
+      Navigator.pop(context, true);
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Lỗi: $e'), backgroundColor: Colors.red),

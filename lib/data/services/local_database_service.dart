@@ -594,4 +594,49 @@ class LocalDatabaseService {
     await db.close();
     _database = null;
   }
+
+  Future<Map<String, String?>> getSyncMetadata() async {
+    final db = await database;
+
+    final result = await db.query('sync_metadata');
+    final Map<String, String?> metadata = {};
+
+    for (final row in result) {
+      metadata[row['key'] as String] = row['value'] as String?;
+    }
+
+    return metadata;
+  }
+
+  // Thêm method để set sync metadata
+  Future<void> setSyncMetadata(String key, String value) async {
+    final db = await database;
+
+    await db.insert('sync_metadata', {
+      'key': key,
+      'value': value,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  // Thêm method để track sync performance
+  Future<void> logSyncOperation({
+    required String operation,
+    required String tableName,
+    required bool success,
+    String? error,
+  }) async {
+    final db = await database;
+
+    await db.insert('change_log', {
+      'table_name': tableName,
+      'record_id': 'sync_log',
+      'operation': operation,
+      'changes': jsonEncode({
+        'success': success,
+        'error': error,
+        'timestamp': DateTime.now().toIso8601String(),
+      }),
+      'user_id': 'system',
+    });
+  }
 }
