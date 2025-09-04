@@ -1,4 +1,4 @@
-// lib/data/services/local_database_service.dart
+// lib/data/services/local_database_service.dart - ENHANCED VERSION
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
@@ -9,9 +9,8 @@ import 'dart:convert';
 class LocalDatabaseService {
   static Database? _database;
   static const String _databaseName = 'moneysun_local.db';
-  static const int _databaseVersion = 1;
+  static const int _databaseVersion = 2; // Increased version
 
-  // Singleton pattern
   static final LocalDatabaseService _instance =
       LocalDatabaseService._internal();
   factory LocalDatabaseService() => _instance;
@@ -23,146 +22,186 @@ class LocalDatabaseService {
   }
 
   Future<Database> _initDatabase() async {
-    String path = join(await getDatabasesPath(), _databaseName);
+    try {
+      String path = join(await getDatabasesPath(), _databaseName);
+      print('📁 Database path: $path');
 
-    return await openDatabase(
-      path,
-      version: _databaseVersion,
-      onCreate: _createTables,
-      onUpgrade: _upgradeDatabase,
-    );
+      return await openDatabase(
+        path,
+        version: _databaseVersion,
+        onCreate: _createTables,
+        onUpgrade: _upgradeDatabase,
+        onOpen: (db) async {
+          print('✅ Database opened successfully');
+        },
+      );
+    } catch (e) {
+      print('❌ Error initializing database: $e');
+      rethrow;
+    }
   }
 
   Future<void> _createTables(Database db, int version) async {
-    // Bảng transactions
-    await db.execute('''
-      CREATE TABLE transactions (
-      id TEXT PRIMARY KEY,
-      firebase_id TEXT UNIQUE, -- Firebase document ID
-      amount REAL NOT NULL,
-      type TEXT NOT NULL,
-      category_id TEXT,
-      wallet_id TEXT NOT NULL,
-      date TEXT NOT NULL,
-      description TEXT,
-      user_id TEXT NOT NULL,
-      sub_category_id TEXT,
-      transfer_to_wallet_id TEXT,
-      
-      sync_status INTEGER DEFAULT 0, -- 0: pending, 1: synced, 2: conflict, 3: error
-      last_modified INTEGER DEFAULT (strftime('%s', 'now')),
-      version INTEGER DEFAULT 1,
-      checksum TEXT, -- For conflict detection
-      
-      conflict_data TEXT, 
-      resolved_at INTEGER,
-      
-      created_at INTEGER DEFAULT (strftime('%s', 'now')),
-      updated_at INTEGER DEFAULT (strftime('%s', 'now')),
-      deleted_at INTEGER, 
-      
-      FOREIGN KEY (wallet_id) REFERENCES wallets(id),
-      FOREIGN KEY (category_id) REFERENCES categories(id)
-    )
-    ''');
+    print('🔨 Creating database tables...');
 
-    // Bảng wallets
-    await db.execute('''
-      CREATE TABLE wallets (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        balance REAL NOT NULL,
-        ownerId TEXT NOT NULL,
-        isVisibleToPartner INTEGER DEFAULT 1,
-        syncStatus INTEGER DEFAULT 0,
-        createdAt INTEGER DEFAULT (strftime('%s', 'now')),
-        updatedAt INTEGER DEFAULT (strftime('%s', 'now'))
-      )
-    ''');
+    try {
+      // Transactions table
+      await db.execute('''
+        CREATE TABLE transactions (
+          id TEXT PRIMARY KEY,
+          firebase_id TEXT UNIQUE,
+          amount REAL NOT NULL,
+          type TEXT NOT NULL,
+          category_id TEXT,
+          wallet_id TEXT NOT NULL,
+          date TEXT NOT NULL,
+          description TEXT,
+          user_id TEXT NOT NULL,
+          sub_category_id TEXT,
+          transfer_to_wallet_id TEXT,
+          
+          sync_status INTEGER DEFAULT 0,
+          last_modified INTEGER DEFAULT (strftime('%s', 'now')),
+          version INTEGER DEFAULT 1,
+          checksum TEXT,
+          
+          conflict_data TEXT, 
+          resolved_at INTEGER,
+          
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+          deleted_at INTEGER, 
+          
+          FOREIGN KEY (wallet_id) REFERENCES wallets(id),
+          FOREIGN KEY (category_id) REFERENCES categories(id)
+        )
+      ''');
 
-    // Bảng categories
-    await db.execute('''
-      CREATE TABLE categories (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        ownerId TEXT NOT NULL,
-        type TEXT NOT NULL,
-        iconCodePoint INTEGER,
-        subCategories TEXT,
-        syncStatus INTEGER DEFAULT 0,
-        createdAt INTEGER DEFAULT (strftime('%s', 'now')),
-        updatedAt INTEGER DEFAULT (strftime('%s', 'now'))
-      )
-    ''');
+      // Wallets table
+      await db.execute('''
+        CREATE TABLE wallets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          balance REAL NOT NULL,
+          ownerId TEXT NOT NULL,
+          isVisibleToPartner INTEGER DEFAULT 1,
+          syncStatus INTEGER DEFAULT 0,
+          createdAt INTEGER DEFAULT (strftime('%s', 'now')),
+          updatedAt INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      ''');
 
-    // Bảng description_history - V7 requirement
-    await db.execute('''
-      CREATE TABLE description_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        userId TEXT NOT NULL,
-        description TEXT NOT NULL,
-        usageCount INTEGER DEFAULT 1,
-        lastUsed INTEGER DEFAULT (strftime('%s', 'now')),
-        createdAt INTEGER DEFAULT (strftime('%s', 'now'))
-      )
-    ''');
+      // Categories table
+      await db.execute('''
+        CREATE TABLE categories (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          ownerId TEXT NOT NULL,
+          type TEXT NOT NULL,
+          iconCodePoint INTEGER,
+          subCategories TEXT,
+          syncStatus INTEGER DEFAULT 0,
+          createdAt INTEGER DEFAULT (strftime('%s', 'now')),
+          updatedAt INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      ''');
 
-    // Bảng sync_queue để quản lý offline sync
-    await db.execute('''
-      CREATE TABLE sync_queue (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      table_name TEXT NOT NULL,
-      record_id TEXT NOT NULL,
-      firebase_id TEXT,
-      operation TEXT NOT NULL,
-      data TEXT NOT NULL,
-      priority INTEGER DEFAULT 1,
-      retry_count INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 3,
-      last_error TEXT,
-      scheduled_at INTEGER DEFAULT (strftime('%s', 'now')),
-      created_at INTEGER DEFAULT (strftime('%s', 'now')),
-      
-      UNIQUE(table_name, record_id, operation)
-    )
-    ''');
+      // Enhanced description_history table
+      await db.execute('''
+        CREATE TABLE description_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          userId TEXT NOT NULL,
+          description TEXT NOT NULL,
+          usageCount INTEGER DEFAULT 1,
+          lastUsed INTEGER DEFAULT (strftime('%s', 'now')),
+          createdAt INTEGER DEFAULT (strftime('%s', 'now')),
+          updatedAt INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          -- Context information for smart suggestions
+          type TEXT,
+          categoryId TEXT,
+          amount REAL,
+          
+          UNIQUE(userId, description)
+        )
+      ''');
 
-    await db.execute('''
-      CREATE TABLE sync_metadata (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-      )
-    ''');
+      // Sync queue table
+      await db.execute('''
+        CREATE TABLE sync_queue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tableName TEXT NOT NULL,
+          recordId TEXT NOT NULL,
+          firebase_id TEXT,
+          operation TEXT NOT NULL,
+          data TEXT NOT NULL,
+          priority INTEGER DEFAULT 1,
+          retry_count INTEGER DEFAULT 0,
+          max_retries INTEGER DEFAULT 3,
+          last_error TEXT,
+          scheduled_at INTEGER DEFAULT (strftime('%s', 'now')),
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          UNIQUE(tableName, recordId, operation)
+        )
+      ''');
 
-    await db.execute('''
-      CREATE TABLE change_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      table_name TEXT NOT NULL,
-      record_id TEXT NOT NULL,
-      operation TEXT NOT NULL, -- INSERT, UPDATE, DELETE
-      changes TEXT, -- JSON of changed fields
-      user_id TEXT NOT NULL,
-      created_at INTEGER DEFAULT (strftime('%s', 'now'))
-    )
-    ''');
+      // Sync metadata table
+      await db.execute('''
+        CREATE TABLE sync_metadata (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      ''');
 
-    // Index cho performance
-    await db.execute(
-      'CREATE INDEX idx_transactions_sync_status ON transactions(sync_status, last_modified)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_transactions_user_date ON transactions(user_id, date)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_transactions_firebase_id ON transactions(firebase_id)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_transactions_checksum ON transactions(checksum)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_change_log_user_time ON change_log(user_id, created_at);',
-    );
+      // Change log table
+      await db.execute('''
+        CREATE TABLE change_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          table_name TEXT NOT NULL,
+          record_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          changes TEXT,
+          user_id TEXT NOT NULL,
+          created_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      ''');
+
+      // Create indexes for performance
+      await _createIndexes(db);
+
+      print('✅ Database tables created successfully');
+    } catch (e) {
+      print('❌ Error creating tables: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> _createIndexes(Database db) async {
+    final indexes = [
+      'CREATE INDEX IF NOT EXISTS idx_transactions_sync_status ON transactions(sync_status, last_modified)',
+      'CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, date)',
+      'CREATE INDEX IF NOT EXISTS idx_transactions_firebase_id ON transactions(firebase_id)',
+      'CREATE INDEX IF NOT EXISTS idx_transactions_checksum ON transactions(checksum)',
+      'CREATE INDEX IF NOT EXISTS idx_wallets_owner ON wallets(ownerId)',
+      'CREATE INDEX IF NOT EXISTS idx_categories_owner_type ON categories(ownerId, type)',
+      'CREATE INDEX IF NOT EXISTS idx_description_user_type ON description_history(userId, type)',
+      'CREATE INDEX IF NOT EXISTS idx_description_user_category ON description_history(userId, categoryId)',
+      'CREATE INDEX IF NOT EXISTS idx_description_user_lastused ON description_history(userId, lastUsed)',
+      'CREATE INDEX IF NOT EXISTS idx_description_user_usage ON description_history(userId, usageCount)',
+      'CREATE INDEX IF NOT EXISTS idx_description_text ON description_history(description)',
+      'CREATE INDEX IF NOT EXISTS idx_sync_queue_priority ON sync_queue(priority, created_at)',
+      'CREATE INDEX IF NOT EXISTS idx_change_log_user_time ON change_log(user_id, created_at)',
+    ];
+
+    for (final indexSql in indexes) {
+      try {
+        await db.execute(indexSql);
+      } catch (e) {
+        print('⚠️ Warning: Could not create index: $e');
+      }
+    }
   }
 
   Future<void> _upgradeDatabase(
@@ -170,42 +209,101 @@ class LocalDatabaseService {
     int oldVersion,
     int newVersion,
   ) async {
-    // Handle database upgrades if needed in future versions
+    print('🔄 Upgrading database from version $oldVersion to $newVersion');
+
     if (oldVersion < 2) {
-      // Example upgrade logic for future versions
+      await _upgradeToVersion2(db);
     }
   }
 
-  // ============ TRANSACTIONS ============
+  Future<void> _upgradeToVersion2(Database db) async {
+    try {
+      // Add missing columns to description_history if they don't exist
+      final columns = await db.rawQuery(
+        'PRAGMA table_info(description_history)',
+      );
+      final columnNames = columns.map((col) => col['name'] as String).toSet();
+
+      final newColumns = {
+        'type': 'TEXT',
+        'categoryId': 'TEXT',
+        'amount': 'REAL',
+        'updatedAt': 'INTEGER DEFAULT (strftime(\'%s\', \'now\'))',
+      };
+
+      for (final entry in newColumns.entries) {
+        if (!columnNames.contains(entry.key)) {
+          await db.execute(
+            'ALTER TABLE description_history ADD COLUMN ${entry.key} ${entry.value}',
+          );
+          print('✅ Added column: ${entry.key}');
+        }
+      }
+
+      await _createIndexes(db);
+      print('✅ Successfully upgraded to version 2');
+    } catch (e) {
+      print('❌ Error upgrading database: $e');
+      rethrow;
+    }
+  }
+
+  // ============ ENHANCED TRANSACTIONS METHODS ============
+
   Future<void> saveTransactionLocally(
     TransactionModel transaction, {
     int syncStatus = 0,
   }) async {
     final db = await database;
 
-    await db.insert('transactions', {
-      'id': transaction.id,
-      'amount': transaction.amount,
-      'type': transaction.type.name,
-      'categoryId': transaction.categoryId,
-      'walletId': transaction.walletId,
-      'date': transaction.date.toIso8601String(),
-      'description': transaction.description,
-      'userId': transaction.userId,
-      'subCategoryId': transaction.subCategoryId,
-      'transferToWalletId': transaction.transferToWalletId,
-      'syncStatus': syncStatus,
-      'updatedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    try {
+      // Generate unique ID if not provided
+      final transactionId = transaction.id.isEmpty
+          ? DateTime.now().millisecondsSinceEpoch.toString()
+          : transaction.id;
 
-    // Add to sync queue if not synced
-    if (syncStatus == 0) {
-      await addToSyncQueue(
-        'transactions',
-        transaction.id,
-        'INSERT',
-        transaction.toJson(),
-      );
+      await db.insert('transactions', {
+        'id': transactionId,
+        'amount': transaction.amount,
+        'type': transaction.type.name,
+        'category_id': transaction.categoryId,
+        'wallet_id': transaction.walletId,
+        'date': transaction.date.toIso8601String(),
+        'description': transaction.description,
+        'user_id': transaction.userId,
+        'sub_category_id': transaction.subCategoryId,
+        'transfer_to_wallet_id': transaction.transferToWalletId,
+        'sync_status': syncStatus,
+        'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+      // Add to sync queue if not synced
+      if (syncStatus == 0) {
+        final transactionWithId = TransactionModel(
+          id: transactionId,
+          amount: transaction.amount,
+          type: transaction.type,
+          categoryId: transaction.categoryId,
+          walletId: transaction.walletId,
+          date: transaction.date,
+          description: transaction.description,
+          userId: transaction.userId,
+          subCategoryId: transaction.subCategoryId,
+          transferToWalletId: transaction.transferToWalletId,
+        );
+
+        await addToSyncQueue(
+          'transactions',
+          transactionId,
+          'INSERT',
+          transactionWithId.toJson(),
+        );
+      }
+
+      print('✅ Transaction saved locally: $transactionId');
+    } catch (e) {
+      print('❌ Error saving transaction locally: $e');
+      rethrow;
     }
   }
 
@@ -217,117 +315,182 @@ class LocalDatabaseService {
   }) async {
     final db = await database;
 
-    String whereClause = '1=1';
-    List<dynamic> whereArgs = [];
+    try {
+      String whereClause = '1=1';
+      List<dynamic> whereArgs = [];
 
-    if (userId != null) {
-      whereClause += ' AND userId = ?';
-      whereArgs.add(userId);
+      if (userId != null) {
+        whereClause += ' AND user_id = ?';
+        whereArgs.add(userId);
+      }
+
+      if (startDate != null) {
+        whereClause += ' AND date >= ?';
+        whereArgs.add(startDate.toIso8601String());
+      }
+
+      if (endDate != null) {
+        whereClause += ' AND date <= ?';
+        whereArgs.add(endDate.toIso8601String());
+      }
+
+      final result = await db.query(
+        'transactions',
+        where: whereClause,
+        whereArgs: whereArgs,
+        orderBy: 'date DESC',
+        limit: limit,
+      );
+
+      final transactions = result
+          .map((map) => _transactionFromMap(map))
+          .toList();
+      print('✅ Retrieved ${transactions.length} local transactions');
+
+      return transactions;
+    } catch (e) {
+      print('❌ Error getting local transactions: $e');
+      return [];
     }
-
-    if (startDate != null) {
-      whereClause += ' AND date >= ?';
-      whereArgs.add(startDate.toIso8601String());
-    }
-
-    if (endDate != null) {
-      whereClause += ' AND date <= ?';
-      whereArgs.add(endDate.toIso8601String());
-    }
-
-    final result = await db.query(
-      'transactions',
-      where: whereClause,
-      whereArgs: whereArgs,
-      orderBy: 'date DESC',
-      limit: limit,
-    );
-
-    return result.map((map) => _transactionFromMap(map)).toList();
   }
 
   TransactionModel _transactionFromMap(Map<String, dynamic> map) {
-    return TransactionModel(
-      id: map['id'],
-      amount: map['amount'],
-      type: TransactionType.values.firstWhere((e) => e.name == map['type']),
-      categoryId: map['categoryId'],
-      walletId: map['walletId'],
-      date: DateTime.parse(map['date']),
-      description: map['description'] ?? '',
-      userId: map['userId'],
-      subCategoryId: map['subCategoryId'],
-      transferToWalletId: map['transferToWalletId'],
-    );
+    try {
+      return TransactionModel(
+        id: map['id'] ?? '',
+        amount: (map['amount'] as num?)?.toDouble() ?? 0.0,
+        type: TransactionType.values.firstWhere(
+          (e) => e.name == map['type'],
+          orElse: () => TransactionType.expense,
+        ),
+        categoryId: map['category_id'],
+        walletId: map['wallet_id'] ?? '',
+        date: DateTime.tryParse(map['date'] ?? '') ?? DateTime.now(),
+        description: map['description'] ?? '',
+        userId: map['user_id'] ?? '',
+        subCategoryId: map['sub_category_id'],
+        transferToWalletId: map['transfer_to_wallet_id'],
+      );
+    } catch (e) {
+      print('⚠️ Error parsing transaction: $e');
+      // Return a default transaction to prevent crashes
+      return TransactionModel(
+        id: map['id'] ?? 'error_${DateTime.now().millisecondsSinceEpoch}',
+        amount: 0.0,
+        type: TransactionType.expense,
+        walletId: '',
+        date: DateTime.now(),
+        description: 'Error loading transaction',
+        userId: map['user_id'] ?? '',
+      );
+    }
   }
 
-  // ============ WALLETS ============
+  // ============ ENHANCED WALLETS METHODS ============
+
   Future<void> saveWalletLocally(Wallet wallet, {int syncStatus = 0}) async {
     final db = await database;
 
-    await db.insert('wallets', {
-      'id': wallet.id,
-      'name': wallet.name,
-      'balance': wallet.balance,
-      'ownerId': wallet.ownerId,
-      'isVisibleToPartner': wallet.isVisibleToPartner ? 1 : 0,
-      'syncStatus': syncStatus,
-      'updatedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    try {
+      await db.insert('wallets', {
+        'id': wallet.id.isEmpty
+            ? DateTime.now().millisecondsSinceEpoch.toString()
+            : wallet.id,
+        'name': wallet.name,
+        'balance': wallet.balance,
+        'ownerId': wallet.ownerId,
+        'isVisibleToPartner': wallet.isVisibleToPartner ? 1 : 0,
+        'syncStatus': syncStatus,
+        'updatedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
 
-    if (syncStatus == 0) {
-      await addToSyncQueue('wallets', wallet.id, 'INSERT', wallet.toJson());
+      if (syncStatus == 0) {
+        await addToSyncQueue('wallets', wallet.id, 'INSERT', wallet.toJson());
+      }
+
+      print('✅ Wallet saved locally: ${wallet.id}');
+    } catch (e) {
+      print('❌ Error saving wallet locally: $e');
+      rethrow;
     }
   }
 
   Future<List<Wallet>> getLocalWallets(String ownerId) async {
     final db = await database;
 
-    final result = await db.query(
-      'wallets',
-      where: 'ownerId = ?',
-      whereArgs: [ownerId],
-      orderBy: 'name ASC',
-    );
+    try {
+      final result = await db.query(
+        'wallets',
+        where: 'ownerId = ?',
+        whereArgs: [ownerId],
+        orderBy: 'name ASC',
+      );
 
-    return result.map((map) => _walletFromMap(map)).toList();
+      final wallets = result.map((map) => _walletFromMap(map)).toList();
+      print('✅ Retrieved ${wallets.length} local wallets for owner: $ownerId');
+
+      return wallets;
+    } catch (e) {
+      print('❌ Error getting local wallets: $e');
+      return [];
+    }
   }
 
   Wallet _walletFromMap(Map<String, dynamic> map) {
-    return Wallet(
-      id: map['id'],
-      name: map['name'],
-      balance: map['balance'],
-      ownerId: map['ownerId'],
-      isVisibleToPartner: map['isVisibleToPartner'] == 1,
-    );
+    try {
+      return Wallet(
+        id: map['id'] ?? '',
+        name: map['name'] ?? 'Unknown Wallet',
+        balance: (map['balance'] as num?)?.toDouble() ?? 0.0,
+        ownerId: map['ownerId'] ?? '',
+        isVisibleToPartner: (map['isVisibleToPartner'] as int?) == 1,
+      );
+    } catch (e) {
+      print('⚠️ Error parsing wallet: $e');
+      return Wallet(
+        id: map['id'] ?? 'error_${DateTime.now().millisecondsSinceEpoch}',
+        name: 'Error Loading Wallet',
+        balance: 0.0,
+        ownerId: map['ownerId'] ?? '',
+      );
+    }
   }
 
-  // ============ CATEGORIES ============
+  // ============ ENHANCED CATEGORIES METHODS ============
+
   Future<void> saveCategoryLocally(
     Category category, {
     int syncStatus = 0,
   }) async {
     final db = await database;
 
-    await db.insert('categories', {
-      'id': category.id,
-      'name': category.name,
-      'ownerId': category.ownerId,
-      'type': category.type,
-      'iconCodePoint': category.iconCodePoint,
-      'subCategories': jsonEncode(category.subCategories),
-      'syncStatus': syncStatus,
-      'updatedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    try {
+      await db.insert('categories', {
+        'id': category.id.isEmpty
+            ? DateTime.now().millisecondsSinceEpoch.toString()
+            : category.id,
+        'name': category.name,
+        'ownerId': category.ownerId,
+        'type': category.type,
+        'iconCodePoint': category.iconCodePoint,
+        'subCategories': jsonEncode(category.subCategories),
+        'syncStatus': syncStatus,
+        'updatedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
 
-    if (syncStatus == 0) {
-      await addToSyncQueue(
-        'categories',
-        category.id,
-        'INSERT',
-        category.toJson(),
-      );
+      if (syncStatus == 0) {
+        await addToSyncQueue(
+          'categories',
+          category.id,
+          'INSERT',
+          category.toJson(),
+        );
+      }
+
+      print('✅ Category saved locally: ${category.id}');
+    } catch (e) {
+      print('❌ Error saving category locally: $e');
+      rethrow;
     }
   }
 
@@ -337,53 +500,74 @@ class LocalDatabaseService {
   }) async {
     final db = await database;
 
-    String whereClause = '1=1';
-    List<dynamic> whereArgs = [];
+    try {
+      String whereClause = '1=1';
+      List<dynamic> whereArgs = [];
 
-    if (ownerId != null) {
-      whereClause += ' AND ownerId = ?';
-      whereArgs.add(ownerId);
+      if (ownerId != null) {
+        whereClause += ' AND ownerId = ?';
+        whereArgs.add(ownerId);
+      }
+
+      if (type != null) {
+        whereClause += ' AND type = ?';
+        whereArgs.add(type);
+      }
+
+      final result = await db.query(
+        'categories',
+        where: whereClause,
+        whereArgs: whereArgs,
+        orderBy: 'name ASC',
+      );
+
+      final categories = result.map((map) => _categoryFromMap(map)).toList();
+      print('✅ Retrieved ${categories.length} local categories');
+
+      return categories;
+    } catch (e) {
+      print('❌ Error getting local categories: $e');
+      return [];
     }
-
-    if (type != null) {
-      whereClause += ' AND type = ?';
-      whereArgs.add(type);
-    }
-
-    final result = await db.query(
-      'categories',
-      where: whereClause,
-      whereArgs: whereArgs,
-      orderBy: 'name ASC',
-    );
-
-    return result.map((map) => _categoryFromMap(map)).toList();
   }
 
   Category _categoryFromMap(Map<String, dynamic> map) {
-    final subCategoriesJson = map['subCategories'] as String?;
-    Map<String, String> subCategories = {};
+    try {
+      final subCategoriesJson = map['subCategories'] as String?;
+      Map<String, String> subCategories = {};
 
-    if (subCategoriesJson != null && subCategoriesJson.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(subCategoriesJson);
-        subCategories = Map<String, String>.from(decoded);
-      } catch (e) {
-        print('Error decoding subCategories: $e');
+      if (subCategoriesJson != null && subCategoriesJson.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(subCategoriesJson);
+          if (decoded is Map) {
+            subCategories = Map<String, String>.from(decoded);
+          }
+        } catch (e) {
+          print('⚠️ Error decoding subCategories: $e');
+        }
       }
-    }
 
-    return Category(
-      id: map['id'],
-      name: map['name'],
-      ownerId: map['ownerId'],
-      type: map['type'],
-      iconCodePoint: map['iconCodePoint'],
-      subCategories: subCategories,
-    );
+      return Category(
+        id: map['id'] ?? '',
+        name: map['name'] ?? 'Unknown Category',
+        ownerId: map['ownerId'] ?? '',
+        type: map['type'] ?? 'expense',
+        iconCodePoint: map['iconCodePoint'] as int?,
+        subCategories: subCategories,
+      );
+    } catch (e) {
+      print('⚠️ Error parsing category: $e');
+      return Category(
+        id: map['id'] ?? 'error_${DateTime.now().millisecondsSinceEpoch}',
+        name: 'Error Loading Category',
+        ownerId: map['ownerId'] ?? '',
+        type: 'expense',
+      );
+    }
   }
 
-  // ============ DESCRIPTION HISTORY - V7 Feature ============
+  // ============ ENHANCED DESCRIPTION HISTORY METHODS ============
+
   Future<void> saveDescriptionToHistory(
     String userId,
     String description,
@@ -392,33 +576,41 @@ class LocalDatabaseService {
 
     final db = await database;
 
-    // Check if description already exists
-    final existing = await db.query(
-      'description_history',
-      where: 'userId = ? AND description = ?',
-      whereArgs: [userId, description.trim()],
-      limit: 1,
-    );
-
-    if (existing.isNotEmpty) {
-      // Update usage count and last used
-      await db.update(
+    try {
+      final existing = await db.query(
         'description_history',
-        <String, Object?>{
-          'usageCount': (existing.first['usageCount'] as int? ?? 0) + 1,
-          'lastUsed': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        },
-        where: 'id = ?',
-        whereArgs: [existing.first['id']],
+        where: 'userId = ? AND description = ?',
+        whereArgs: [userId, description.trim()],
+        limit: 1,
       );
-    } else {
-      // Insert new description
-      await db.insert('description_history', {
-        'userId': userId,
-        'description': description.trim(),
-        'usageCount': 1,
-        'lastUsed': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      });
+
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+      if (existing.isNotEmpty) {
+        await db.update(
+          'description_history',
+          {
+            'usageCount': (existing.first['usageCount'] as int? ?? 0) + 1,
+            'lastUsed': now,
+            'updatedAt': now,
+          },
+          where: 'id = ?',
+          whereArgs: [existing.first['id']],
+        );
+      } else {
+        await db.insert('description_history', {
+          'userId': userId,
+          'description': description.trim(),
+          'usageCount': 1,
+          'lastUsed': now,
+          'createdAt': now,
+          'updatedAt': now,
+        });
+      }
+
+      print('✅ Description saved to history: $description');
+    } catch (e) {
+      print('❌ Error saving description to history: $e');
     }
   }
 
@@ -428,198 +620,20 @@ class LocalDatabaseService {
   }) async {
     final db = await database;
 
-    final result = await db.query(
-      'description_history',
-      where: 'userId = ?',
-      whereArgs: [userId],
-      orderBy: 'usageCount DESC, lastUsed DESC',
-      limit: limit,
-    );
+    try {
+      final result = await db.query(
+        'description_history',
+        where: 'userId = ?',
+        whereArgs: [userId],
+        orderBy: 'usageCount DESC, lastUsed DESC',
+        limit: limit,
+      );
 
-    return result.map((map) => map['description'] as String).toList();
-  }
-
-  // ============ SYNC QUEUE MANAGEMENT ============
-  Future<void> addToSyncQueue(
-    String tableName,
-    String recordId,
-    String operation,
-    Map<String, dynamic> data,
-  ) async {
-    final db = await database;
-
-    await db.insert('sync_queue', {
-      'tableName': tableName,
-      'recordId': recordId,
-      'operation': operation,
-      'data': jsonEncode(data),
-      'priority': _getSyncPriority(operation),
-    });
-  }
-
-  int _getSyncPriority(String operation) {
-    switch (operation) {
-      case 'DELETE':
-        return 3; // Highest priority
-      case 'UPDATE':
-        return 2; // Medium priority
-      case 'INSERT':
-        return 1; // Lowest priority
-      default:
-        return 1;
+      return result.map((map) => map['description'] as String).toList();
+    } catch (e) {
+      print('❌ Error getting description suggestions: $e');
+      return [];
     }
-  }
-
-  Future<List<Map<String, dynamic>>> getPendingSyncItems({
-    int limit = 50,
-  }) async {
-    final db = await database;
-
-    return await db.query(
-      'sync_queue',
-      orderBy: 'priority DESC, createdAt ASC',
-      limit: limit,
-    );
-  }
-
-  Future<void> removeSyncItem(int syncId) async {
-    final db = await database;
-    await db.delete('sync_queue', where: 'id = ?', whereArgs: [syncId]);
-  }
-
-  Future<void> incrementRetryCount(int syncId) async {
-    final db = await database;
-    await db.update(
-      'sync_queue',
-      {'retryCount': 'retryCount + 1'},
-      where: 'id = ?',
-      whereArgs: [syncId],
-    );
-  }
-
-  // ============ SYNC STATUS MANAGEMENT ============
-  Future<void> markAsSynced(String tableName, String recordId) async {
-    final db = await database;
-
-    await db.update(
-      tableName,
-      {'syncStatus': 1},
-      where: 'id = ?',
-      whereArgs: [recordId],
-    );
-  }
-
-  Future<List<Map<String, dynamic>>> getUnsyncedRecords(
-    String tableName,
-  ) async {
-    final db = await database;
-
-    return await db.query(
-      tableName,
-      where: 'syncStatus = 0',
-      orderBy: 'updatedAt ASC',
-    );
-  }
-
-  // ============ UTILITY METHODS ============
-  Future<void> clearAllData() async {
-    final db = await database;
-
-    await db.transaction((txn) async {
-      await txn.delete('transactions');
-      await txn.delete('wallets');
-      await txn.delete('categories');
-      await txn.delete('description_history');
-      await txn.delete('sync_queue');
-    });
-  }
-
-  Future<void> clearSyncedData() async {
-    final db = await database;
-
-    await db.transaction((txn) async {
-      await txn.delete('transactions', where: 'syncStatus = 1');
-      await txn.delete('wallets', where: 'syncStatus = 1');
-      await txn.delete('categories', where: 'syncStatus = 1');
-    });
-  }
-
-  Future<Map<String, int>> getDatabaseStats() async {
-    final db = await database;
-
-    final transactions = await db.rawQuery(
-      'SELECT COUNT(*) as count FROM transactions',
-    );
-    final wallets = await db.rawQuery('SELECT COUNT(*) as count FROM wallets');
-    final categories = await db.rawQuery(
-      'SELECT COUNT(*) as count FROM categories',
-    );
-    final descriptions = await db.rawQuery(
-      'SELECT COUNT(*) as count FROM description_history',
-    );
-    final syncQueue = await db.rawQuery(
-      'SELECT COUNT(*) as count FROM sync_queue',
-    );
-
-    return {
-      'transactions': transactions.first['count'] as int,
-      'wallets': wallets.first['count'] as int,
-      'categories': categories.first['count'] as int,
-      'descriptions': descriptions.first['count'] as int,
-      'pendingSync': syncQueue.first['count'] as int,
-    };
-  }
-
-  // Close database
-  Future<void> close() async {
-    final db = await database;
-    await db.close();
-    _database = null;
-  }
-
-  Future<Map<String, String?>> getSyncMetadata() async {
-    final db = await database;
-
-    final result = await db.query('sync_metadata');
-    final Map<String, String?> metadata = {};
-
-    for (final row in result) {
-      metadata[row['key'] as String] = row['value'] as String?;
-    }
-
-    return metadata;
-  }
-
-  // Thêm method để set sync metadata
-  Future<void> setSyncMetadata(String key, String value) async {
-    final db = await database;
-
-    await db.insert('sync_metadata', {
-      'key': key,
-      'value': value,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
-  }
-
-  // Thêm method để track sync performance
-  Future<void> logSyncOperation({
-    required String operation,
-    required String tableName,
-    required bool success,
-    String? error,
-  }) async {
-    final db = await database;
-
-    await db.insert('change_log', {
-      'table_name': tableName,
-      'record_id': 'sync_log',
-      'operation': operation,
-      'changes': jsonEncode({
-        'success': success,
-        'error': error,
-        'timestamp': DateTime.now().toIso8601String(),
-      }),
-      'user_id': 'system',
-    });
   }
 
   Future<void> saveDescriptionWithContext(
@@ -634,7 +648,6 @@ class LocalDatabaseService {
     final db = await database;
 
     try {
-      // Check if description exists
       final existing = await db.query(
         'description_history',
         where: 'userId = ? AND description = ?',
@@ -645,7 +658,6 @@ class LocalDatabaseService {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
       if (existing.isNotEmpty) {
-        // Update existing entry
         await db.update(
           'description_history',
           {
@@ -660,7 +672,6 @@ class LocalDatabaseService {
           whereArgs: [existing.first['id']],
         );
       } else {
-        // Insert new entry
         await db.insert('description_history', {
           'userId': userId,
           'description': description.trim(),
@@ -674,12 +685,10 @@ class LocalDatabaseService {
         });
       }
     } catch (e) {
-      print('Error saving description with context: $e');
-      rethrow;
+      print('❌ Error saving description with context: $e');
     }
   }
 
-  /// Get smart description suggestions based on usage patterns
   Future<List<String>> getSmartDescriptionSuggestions(
     String userId, {
     int limit = 10,
@@ -692,13 +701,11 @@ class LocalDatabaseService {
       String whereClause = 'userId = ?';
       List<dynamic> whereArgs = [userId];
 
-      // Filter by transaction type if provided
       if (type != null) {
         whereClause += ' AND (type = ? OR type IS NULL)';
         whereArgs.add(type);
       }
 
-      // Filter by query if provided
       if (query != null && query.isNotEmpty) {
         whereClause += ' AND description LIKE ?';
         whereArgs.add('%$query%');
@@ -722,12 +729,11 @@ class LocalDatabaseService {
 
       return result.map((map) => map['description'] as String).toList();
     } catch (e) {
-      print('Error getting smart description suggestions: $e');
+      print('❌ Error getting smart description suggestions: $e');
       return [];
     }
   }
 
-  /// Advanced search with fuzzy matching and context awareness
   Future<List<String>> searchDescriptionHistory(
     String userId,
     String query, {
@@ -743,7 +749,6 @@ class LocalDatabaseService {
       String whereClause = 'userId = ?';
       List<dynamic> whereArgs = [userId];
 
-      // Add type filter
       if (type != null) {
         whereClause += ' AND (type = ? OR type IS NULL)';
         whereArgs.add(type);
@@ -752,7 +757,7 @@ class LocalDatabaseService {
       List<String> results = [];
 
       if (fuzzySearch) {
-        // First: Exact matches
+        // Exact matches first
         final exactMatches = await db.query(
           'description_history',
           where: '$whereClause AND description LIKE ?',
@@ -762,7 +767,7 @@ class LocalDatabaseService {
         );
         results.addAll(exactMatches.map((m) => m['description'] as String));
 
-        // Second: Contains matches (if we need more results)
+        // Contains matches
         if (results.length < limit) {
           final containsMatches = await db.query(
             'description_history',
@@ -776,28 +781,7 @@ class LocalDatabaseService {
             containsMatches.map((m) => m['description'] as String),
           );
         }
-
-        // Third: Fuzzy matches using SOUNDEX or similar words
-        if (results.length < limit && query.length >= 3) {
-          final fuzzyMatches = await db.query(
-            'description_history',
-            where:
-                '''
-              $whereClause AND 
-              description NOT LIKE ? AND 
-              (
-                LENGTH(description) - LENGTH(REPLACE(LOWER(description), LOWER(?), '')) > 0 OR
-                SUBSTR(description, 1, 3) = SUBSTR(?, 1, 3)
-              )
-            ''',
-            whereArgs: [...whereArgs, '%$query%', query, query],
-            orderBy: 'usageCount DESC, lastUsed DESC',
-            limit: limit - results.length,
-          );
-          results.addAll(fuzzyMatches.map((m) => m['description'] as String));
-        }
       } else {
-        // Simple search
         final simpleMatches = await db.query(
           'description_history',
           where: '$whereClause AND description LIKE ?',
@@ -808,15 +792,13 @@ class LocalDatabaseService {
         results.addAll(simpleMatches.map((m) => m['description'] as String));
       }
 
-      // Remove duplicates while preserving order
       return results.toSet().toList().take(limit).toList();
     } catch (e) {
-      print('Error in advanced description search: $e');
+      print('❌ Error in description search: $e');
       return [];
     }
   }
 
-  /// Get contextual suggestions based on similar transactions
   Future<List<String>> getContextualSuggestions(
     String userId, {
     String? type,
@@ -830,7 +812,6 @@ class LocalDatabaseService {
       String whereClause = 'userId = ?';
       List<dynamic> whereArgs = [userId];
 
-      // Build context-aware query
       List<String> conditions = [];
 
       if (type != null) {
@@ -844,7 +825,6 @@ class LocalDatabaseService {
       }
 
       if (amount != null) {
-        // Find descriptions used for similar amounts (within 20% range)
         final minAmount = amount * 0.8;
         final maxAmount = amount * 1.2;
         conditions.add('amount BETWEEN ? AND ?');
@@ -855,39 +835,18 @@ class LocalDatabaseService {
         whereClause += ' AND (${conditions.join(' OR ')})';
       }
 
-      // FIX: Use proper SQL query without orderByArgs
-      String orderByClause;
+      String orderByClause = 'usageCount DESC, lastUsed DESC';
       if (type != null && categoryId != null) {
-        orderByClause =
-            '''
+        orderByClause = '''
           CASE
-            WHEN type = '$type' AND categoryId = '$categoryId' THEN usageCount * 3
-            WHEN type = '$type' THEN usageCount * 2
-            WHEN categoryId = '$categoryId' THEN usageCount * 1.5
+            WHEN type = ? AND categoryId = ? THEN usageCount * 3
+            WHEN type = ? THEN usageCount * 2
+            WHEN categoryId = ? THEN usageCount * 1.5
             ELSE usageCount
           END DESC,
           lastUsed DESC
         ''';
-      } else if (type != null) {
-        orderByClause =
-            '''
-          CASE
-            WHEN type = '$type' THEN usageCount * 2
-            ELSE usageCount
-          END DESC,
-          lastUsed DESC
-        ''';
-      } else if (categoryId != null) {
-        orderByClause =
-            '''
-          CASE
-            WHEN categoryId = '$categoryId' THEN usageCount * 2
-            ELSE usageCount
-          END DESC,
-          lastUsed DESC
-        ''';
-      } else {
-        orderByClause = 'usageCount DESC, lastUsed DESC';
+        whereArgs.addAll([type, categoryId, type, categoryId]);
       }
 
       final result = await db.query(
@@ -900,12 +859,267 @@ class LocalDatabaseService {
 
       return result.map((map) => map['description'] as String).toList();
     } catch (e) {
-      print('Error getting contextual suggestions: $e');
+      print('❌ Error getting contextual suggestions: $e');
       return [];
     }
   }
 
-  /// Get trending descriptions (most used in recent period)
+  // ============ SYNC QUEUE MANAGEMENT ============
+
+  Future<void> addToSyncQueue(
+    String tableName,
+    String recordId,
+    String operation,
+    Map<String, dynamic> data,
+  ) async {
+    final db = await database;
+
+    try {
+      await db.insert('sync_queue', {
+        'tableName': tableName,
+        'recordId': recordId,
+        'operation': operation,
+        'data': jsonEncode(data),
+        'priority': _getSyncPriority(operation),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    } catch (e) {
+      print('❌ Error adding to sync queue: $e');
+    }
+  }
+
+  int _getSyncPriority(String operation) {
+    switch (operation) {
+      case 'DELETE':
+        return 3;
+      case 'UPDATE':
+        return 2;
+      case 'INSERT':
+        return 1;
+      default:
+        return 1;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getPendingSyncItems({
+    int limit = 50,
+  }) async {
+    final db = await database;
+
+    try {
+      return await db.query(
+        'sync_queue',
+        where: 'retry_count < max_retries',
+        orderBy: 'priority DESC, created_at ASC',
+        limit: limit,
+      );
+    } catch (e) {
+      print('❌ Error getting pending sync items: $e');
+      return [];
+    }
+  }
+
+  Future<void> removeSyncItem(int syncId) async {
+    final db = await database;
+
+    try {
+      await db.delete('sync_queue', where: 'id = ?', whereArgs: [syncId]);
+    } catch (e) {
+      print('❌ Error removing sync item: $e');
+    }
+  }
+
+  Future<void> incrementRetryCount(int syncId) async {
+    final db = await database;
+
+    try {
+      await db.execute(
+        'UPDATE sync_queue SET retry_count = retry_count + 1 WHERE id = ?',
+        [syncId],
+      );
+    } catch (e) {
+      print('❌ Error incrementing retry count: $e');
+    }
+  }
+
+  // ============ SYNC STATUS MANAGEMENT ============
+
+  Future<void> markAsSynced(String tableName, String recordId) async {
+    final db = await database;
+
+    try {
+      await db.update(
+        tableName,
+        {
+          'sync_status': 1,
+          'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [recordId],
+      );
+    } catch (e) {
+      print('❌ Error marking as synced: $e');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getUnsyncedRecords(
+    String tableName,
+  ) async {
+    final db = await database;
+
+    try {
+      return await db.query(
+        tableName,
+        where: 'sync_status = 0',
+        orderBy: 'updated_at ASC',
+      );
+    } catch (e) {
+      print('❌ Error getting unsynced records: $e');
+      return [];
+    }
+  }
+
+  // ============ METADATA MANAGEMENT ============
+
+  Future<Map<String, String?>> getSyncMetadata() async {
+    final db = await database;
+
+    try {
+      final result = await db.query('sync_metadata');
+      final Map<String, String?> metadata = {};
+
+      for (final row in result) {
+        metadata[row['key'] as String] = row['value'] as String?;
+      }
+
+      return metadata;
+    } catch (e) {
+      print('❌ Error getting sync metadata: $e');
+      return {};
+    }
+  }
+
+  Future<void> setSyncMetadata(String key, String value) async {
+    final db = await database;
+
+    try {
+      await db.insert('sync_metadata', {
+        'key': key,
+        'value': value,
+        'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    } catch (e) {
+      print('❌ Error setting sync metadata: $e');
+    }
+  }
+
+  Future<void> logSyncOperation({
+    required String operation,
+    required String tableName,
+    required bool success,
+    String? error,
+  }) async {
+    final db = await database;
+
+    try {
+      await db.insert('change_log', {
+        'table_name': tableName,
+        'record_id': 'sync_log',
+        'operation': operation,
+        'changes': jsonEncode({
+          'success': success,
+          'error': error,
+          'timestamp': DateTime.now().toIso8601String(),
+        }),
+        'user_id': 'system',
+        'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      });
+    } catch (e) {
+      print('❌ Error logging sync operation: $e');
+    }
+  }
+
+  // ============ UTILITY METHODS ============
+
+  Future<void> clearAllData() async {
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        await txn.delete('transactions');
+        await txn.delete('wallets');
+        await txn.delete('categories');
+        await txn.delete('description_history');
+        await txn.delete('sync_queue');
+        await txn.delete('sync_metadata');
+        await txn.delete('change_log');
+      });
+
+      print('✅ All data cleared successfully');
+    } catch (e) {
+      print('❌ Error clearing all data: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> clearSyncedData() async {
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        await txn.delete('transactions', where: 'sync_status = 1');
+        await txn.delete('wallets', where: 'syncStatus = 1');
+        await txn.delete('categories', where: 'syncStatus = 1');
+        // Don't clear description_history as it's useful offline
+      });
+
+      print('✅ Synced data cleared successfully');
+    } catch (e) {
+      print('❌ Error clearing synced data: $e');
+      rethrow;
+    }
+  }
+
+  Future<Map<String, int>> getDatabaseStats() async {
+    final db = await database;
+
+    try {
+      final transactions = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM transactions',
+      );
+      final wallets = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM wallets',
+      );
+      final categories = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM categories',
+      );
+      final descriptions = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM description_history',
+      );
+      final syncQueue = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM sync_queue',
+      );
+
+      return {
+        'transactions': transactions.first['count'] as int,
+        'wallets': wallets.first['count'] as int,
+        'categories': categories.first['count'] as int,
+        'descriptions': descriptions.first['count'] as int,
+        'pendingSync': syncQueue.first['count'] as int,
+      };
+    } catch (e) {
+      print('❌ Error getting database stats: $e');
+      return {
+        'transactions': 0,
+        'wallets': 0,
+        'categories': 0,
+        'descriptions': 0,
+        'pendingSync': 0,
+      };
+    }
+  }
+
+  // ============ ADVANCED DESCRIPTION METHODS ============
+
   Future<List<String>> getTrendingDescriptions(
     String userId, {
     int days = 30,
@@ -939,12 +1153,11 @@ class LocalDatabaseService {
 
       return result.map((map) => map['description'] as String).toList();
     } catch (e) {
-      print('Error getting trending descriptions: $e');
+      print('❌ Error getting trending descriptions: $e');
       return [];
     }
   }
 
-  /// Clean up old description entries to maintain performance
   Future<void> cleanupDescriptionHistory(
     String userId, {
     int keepDays = 365,
@@ -958,20 +1171,18 @@ class LocalDatabaseService {
               .millisecondsSinceEpoch ~/
           1000;
 
-      // Keep frequently used descriptions even if old
-      await db.delete(
+      final deletedCount = await db.delete(
         'description_history',
         where: 'userId = ? AND lastUsed < ? AND usageCount < 5',
         whereArgs: [userId, cutoffTime],
       );
 
-      print('✅ Cleaned up old description history');
+      print('✅ Cleaned up $deletedCount old description entries');
     } catch (e) {
-      print('Error cleaning up description history: $e');
+      print('❌ Error cleaning up description history: $e');
     }
   }
 
-  /// Get description statistics for debugging/analytics
   Future<Map<String, dynamic>> getDescriptionStats(String userId) async {
     final db = await database;
 
@@ -1015,80 +1226,206 @@ class LocalDatabaseService {
             .toList(),
       };
     } catch (e) {
-      print('Error getting description stats: $e');
+      print('❌ Error getting description stats: $e');
       return {};
     }
   }
 
-  // ============ ENHANCED DATABASE SCHEMA ============
+  // ============ DATABASE HEALTH & MAINTENANCE ============
 
-  // Update the _createTables method to include new columns
-  Future<void> _createEnhancedDescriptionTable(Database db) async {
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS description_history_enhanced (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        userId TEXT NOT NULL,
-        description TEXT NOT NULL,
-        usageCount INTEGER DEFAULT 1,
-        lastUsed INTEGER DEFAULT (strftime('%s', 'now')),
-        createdAt INTEGER DEFAULT (strftime('%s', 'now')),
-        updatedAt INTEGER DEFAULT (strftime('%s', 'now')),
-        
-        -- Context information
-        type TEXT, -- 'income', 'expense', 'transfer'
-        categoryId TEXT,
-        amount REAL,
-        
-        -- Performance indexes
-        UNIQUE(userId, description),
-        INDEX(userId, type),
-        INDEX(userId, categoryId),
-        INDEX(userId, lastUsed),
-        INDEX(userId, usageCount),
-        INDEX(description)
-      )
-    ''');
-  }
-
-  // Migrate existing data if needed
-  Future<void> migrateDescriptionHistory() async {
+  Future<void> vacuum() async {
     final db = await database;
 
     try {
-      // Check if old table exists
+      await db.execute('VACUUM');
+      print('✅ Database vacuumed successfully');
+    } catch (e) {
+      print('❌ Error vacuuming database: $e');
+    }
+  }
+
+  Future<void> analyze() async {
+    final db = await database;
+
+    try {
+      await db.execute('ANALYZE');
+      print('✅ Database analyzed successfully');
+    } catch (e) {
+      print('❌ Error analyzing database: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> getDatabaseInfo() async {
+    final db = await database;
+
+    try {
+      final version = await db.getVersion();
+
       final tables = await db.query(
         'sqlite_master',
-        where: 'type = ? AND name = ?',
-        whereArgs: ['table', 'description_history'],
+        where: 'type = ?',
+        whereArgs: ['table'],
+      );
+      final tableNames = tables.map((t) => t['name'] as String).toList();
+
+      final stats = await getDatabaseStats();
+
+      return {
+        'version': version,
+        'path': db.path,
+        'tables': tableNames,
+        'stats': stats,
+      };
+    } catch (e) {
+      print('❌ Error getting database info: $e');
+      return {'error': e.toString()};
+    }
+  }
+
+  // ============ BACKUP & RESTORE ============
+
+  Future<Map<String, dynamic>> exportUserData(String userId) async {
+    final db = await database;
+
+    try {
+      final transactions = await db.query(
+        'transactions',
+        where: 'user_id = ?',
+        whereArgs: [userId],
       );
 
-      if (tables.isNotEmpty) {
-        // Check if new columns exist
-        final columns = await db.rawQuery(
-          'PRAGMA table_info(description_history)',
-        );
-        final hasTypeColumn = columns.any((col) => col['name'] == 'type');
+      final wallets = await db.query(
+        'wallets',
+        where: 'ownerId = ?',
+        whereArgs: [userId],
+      );
 
-        if (!hasTypeColumn) {
-          // Add new columns to existing table
-          await db.execute(
-            'ALTER TABLE description_history ADD COLUMN type TEXT',
-          );
-          await db.execute(
-            'ALTER TABLE description_history ADD COLUMN categoryId TEXT',
-          );
-          await db.execute(
-            'ALTER TABLE description_history ADD COLUMN amount REAL',
-          );
-          await db.execute(
-            'ALTER TABLE description_history ADD COLUMN updatedAt INTEGER DEFAULT (strftime(\'%s\', \'now\'))',
-          );
+      final categories = await db.query(
+        'categories',
+        where: 'ownerId = ?',
+        whereArgs: [userId],
+      );
 
-          print('✅ Migrated description_history table with new columns');
-        }
-      }
+      final descriptions = await db.query(
+        'description_history',
+        where: 'userId = ?',
+        whereArgs: [userId],
+      );
+
+      return {
+        'exportDate': DateTime.now().toIso8601String(),
+        'userId': userId,
+        'transactions': transactions,
+        'wallets': wallets,
+        'categories': categories,
+        'descriptions': descriptions,
+      };
     } catch (e) {
-      print('Error migrating description history: $e');
+      print('❌ Error exporting user data: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> importUserData(Map<String, dynamic> data) async {
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        // Import transactions
+        final transactions = data['transactions'] as List? ?? [];
+        for (final transaction in transactions) {
+          await txn.insert(
+            'transactions',
+            transaction as Map<String, dynamic>,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+
+        // Import wallets
+        final wallets = data['wallets'] as List? ?? [];
+        for (final wallet in wallets) {
+          await txn.insert(
+            'wallets',
+            wallet as Map<String, dynamic>,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+
+        // Import categories
+        final categories = data['categories'] as List? ?? [];
+        for (final category in categories) {
+          await txn.insert(
+            'categories',
+            category as Map<String, dynamic>,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+
+        // Import descriptions
+        final descriptions = data['descriptions'] as List? ?? [];
+        for (final description in descriptions) {
+          await txn.insert(
+            'description_history',
+            description as Map<String, dynamic>,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+      });
+
+      print('✅ User data imported successfully');
+    } catch (e) {
+      print('❌ Error importing user data: $e');
+      rethrow;
+    }
+  }
+
+  // ============ ERROR RECOVERY ============
+
+  Future<bool> isHealthy() async {
+    try {
+      final db = await database;
+      await db.query('sqlite_master', limit: 1);
+      return true;
+    } catch (e) {
+      print('❌ Database health check failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> repair() async {
+    try {
+      print('🔧 Attempting database repair...');
+
+      // Close current database
+      await close();
+
+      // Reinitialize
+      _database = await _initDatabase();
+
+      print('✅ Database repair completed');
+    } catch (e) {
+      print('❌ Database repair failed: $e');
+      rethrow;
+    }
+  }
+
+  // ============ RESOURCE MANAGEMENT ============
+
+  Future<void> close() async {
+    if (_database != null) {
+      await _database!.close();
+      _database = null;
+      print('✅ Database closed successfully');
+    }
+  }
+
+  Future<void> optimize() async {
+    try {
+      await analyze();
+      await vacuum();
+      print('✅ Database optimization completed');
+    } catch (e) {
+      print('❌ Database optimization failed: $e');
     }
   }
 }

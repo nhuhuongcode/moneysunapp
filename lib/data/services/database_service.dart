@@ -1,3 +1,6 @@
+// lib/data/services/database_service.dart - FIXED VERSION
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:intl/intl.dart';
@@ -9,206 +12,69 @@ import 'package:moneysun/data/models/report_data_model.dart';
 import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/services/local_database_service.dart';
+import 'package:moneysun/data/services/offline_sync_service.dart';
 import 'package:async/async.dart';
 import 'package:collection/collection.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:moneysun/data/services/offline_sync_service.dart';
 
 class DatabaseService {
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
   final String? _uid = FirebaseAuth.instance.currentUser?.uid;
-
   final LocalDatabaseService _localDb = LocalDatabaseService();
+  final OfflineSyncService _syncService = OfflineSyncService();
 
   static Future<void> enableOfflineSupport() async {
     FirebaseDatabase.instance.setPersistenceEnabled(true);
-    FirebaseDatabase.instance.setPersistenceCacheSizeBytes(
-      10000000,
-    ); // 10MB cache
+    FirebaseDatabase.instance.setPersistenceCacheSizeBytes(10000000);
   }
 
-  // FIX: Check connectivity and sync when online
-  Future<void> syncWhenOnline() async {
-    final connectivity = Connectivity();
-    connectivity.onConnectivityChanged.listen(
-      (ConnectivityResult result) {
-            if (result != ConnectivityResult.none) {
-              _performSync();
-            }
-          }
-          as void Function(List<ConnectivityResult> event)?,
-    );
-  }
+  // ============ ENHANCED TRANSACTION METHODS ============
 
-  Future<void> _performSync() async {
-    try {
-      // Force sync with server when coming back online
-      await _dbRef
-          .child('users')
-          .child(_uid!)
-          .child('lastSync')
-          .set(ServerValue.timestamp);
-      print('Sync completed successfully');
-    } catch (e) {
-      print('Sync failed: $e');
-    }
-  }
-
-  // FIX: Wallet selection cho AddTransaction - chỉ cho phép chọn ví của mình và ví chung
-  Stream<List<Wallet>> getSelectableWalletsStream(UserProvider userProvider) {
-    if (_uid == null) return Stream.value([]);
-
-    return _dbRef.child('wallets').onValue.map((event) {
-      final List<Wallet> selectableWallets = [];
-      if (event.snapshot.exists) {
-        final allWalletsMap = event.snapshot.value as Map<dynamic, dynamic>;
-        allWalletsMap.forEach((key, value) {
-          final walletSnapshot = event.snapshot.child(key);
-          final wallet = Wallet.fromSnapshot(walletSnapshot);
-
-          // CHỈ cho phép chọn:
-          // 1. Ví của chính mình
-          // 2. Ví chung (partnership wallet)
-          if (wallet.ownerId == _uid ||
-              wallet.ownerId == userProvider.partnershipId) {
-            selectableWallets.add(wallet);
-          }
-        });
-      }
-      return selectableWallets;
-    });
-  }
-
-  // Lấy danh sách các ví có thể XEM (bao gồm cả ví partner visible)
-  Stream<List<Wallet>> getWalletsStream(UserProvider userProvider) {
-    if (_uid == null) return Stream.value([]);
-
-    if (userProvider.partnershipId == null || userProvider.partnerUid == null) {
-      final walletRef = _dbRef
-          .child('wallets')
-          .orderByChild('ownerId')
-          .equalTo(_uid);
-
-      return walletRef.onValue.map((event) {
-        final List<Wallet> wallets = [];
-        if (event.snapshot.exists) {
-          final walletMap = event.snapshot.value as Map<dynamic, dynamic>;
-          walletMap.forEach((key, value) {
-            final snapshot = event.snapshot.child(key);
-            wallets.add(Wallet.fromSnapshot(snapshot));
-          });
-        }
-        return wallets;
-      });
-    }
-
-    final pId = userProvider.partnershipId!;
-    final partnerUid = userProvider.partnerUid!;
-
-    return _dbRef.child('wallets').onValue.map((event) {
-      final List<Wallet> visibleWallets = [];
-      if (event.snapshot.exists) {
-        final allWalletsMap = event.snapshot.value as Map<dynamic, dynamic>;
-        allWalletsMap.forEach((key, value) {
-          final walletSnapshot = event.snapshot.child(key);
-          final wallet = Wallet.fromSnapshot(walletSnapshot);
-
-          // Áp dụng các quy tắc hiển thị:
-          if (wallet.ownerId == _uid) {
-            visibleWallets.add(wallet);
-          } else if (wallet.ownerId == pId) {
-            visibleWallets.add(wallet);
-          } else if (wallet.ownerId == partnerUid &&
-              wallet.isVisibleToPartner) {
-            visibleWallets.add(wallet);
-          }
-        });
-      }
-      return visibleWallets;
-    });
-  }
-
-  // Future<void> addTransaction(TransactionModel transaction) async {
-  //   if (_uid == null) return;
-  //   try {
-  //     // 1. Lưu giao dịch vào database
-  //     final newTransactionRef = _dbRef.child('transactions').push();
-  //     final transactionWithId = TransactionModel(
-  //       id: newTransactionRef.key!,
-  //       amount: transaction.amount,
-  //       type: transaction.type,
-  //       categoryId: transaction.categoryId,
-  //       walletId: transaction.walletId,
-  //       date: transaction.date,
-  //       description: transaction.description,
-  //       userId: transaction.userId,
-  //       subCategoryId: transaction.subCategoryId,
-  //       transferToWalletId: transaction.transferToWalletId,
-  //     );
-  //     await newTransactionRef.set(transaction.toJson());
-
-  //     // 2. FIX: Cập nhật số dư của ví tương ứng
-  //     final walletRef = _dbRef.child('wallets').child(transaction.walletId);
-  //     final walletSnapshot = await walletRef.get();
-
-  //     if (walletSnapshot.exists) {
-  //       double balanceChange = 0;
-
-  //       switch (transaction.type) {
-  //         case TransactionType.income:
-  //           balanceChange = transaction.amount; // CỘNG cho thu nhập
-  //           break;
-  //         case TransactionType.expense:
-  //           balanceChange = -transaction.amount; // TRỪ cho chi tiêu
-  //           break;
-  //         case TransactionType.transfer:
-  //           balanceChange =
-  //               -transaction.amount; // TRỪ cho transfer (từ ví nguồn)
-  //           break;
-  //       }
-
-  //       await walletRef
-  //           .child('balance')
-  //           .set(ServerValue.increment(balanceChange));
-  //     }
-
-  //     await _localDb.saveTransactionLocally(transactionWithId, syncStatus: 1);
-
-  //     if (transaction.description.isNotEmpty) {
-  //       await _localDb.saveDescriptionToHistory(_uid!, transaction.description);
-  //     }
-  //   } catch (e) {
-  //     if (transaction.description.isNotEmpty) {
-  //       await _localDb.saveDescriptionToHistory(_uid!, transaction.description);
-  //     }
-  //     print("❌ Error adding transaction: $e");
-  //     rethrow;
-  //   }
-  // }
-
+  /// FIX: Enhanced offline-first transaction creation
   Future<void> addTransaction(TransactionModel transaction) async {
     if (_uid == null) return;
 
     try {
-      // 1. Luôn lưu local trước (offline-first)
-      await _localDb.saveTransactionLocally(transaction, syncStatus: 0);
+      // Generate unique ID if not provided
+      final transactionId = transaction.id.isEmpty
+          ? DateTime.now().millisecondsSinceEpoch.toString()
+          : transaction.id;
 
-      // 2. Lưu description vào history
+      final transactionWithId = TransactionModel(
+        id: transactionId,
+        amount: transaction.amount,
+        type: transaction.type,
+        categoryId: transaction.categoryId,
+        walletId: transaction.walletId,
+        date: transaction.date,
+        description: transaction.description,
+        userId: transaction.userId,
+        subCategoryId: transaction.subCategoryId,
+        transferToWalletId: transaction.transferToWalletId,
+      );
+
+      // Always save locally first (offline-first approach)
+      await _syncService.addTransactionOffline(transactionWithId);
+
+      // Save description to history with context
       if (transaction.description.isNotEmpty) {
-        await _localDb.saveDescriptionToHistory(_uid!, transaction.description);
+        await _syncService.saveDescriptionWithContext(
+          _uid!,
+          transaction.description,
+          type: transaction.type,
+          categoryId: transaction.categoryId,
+          amount: transaction.amount,
+        );
       }
 
-      // 3. Thử sync ngay nếu online (thông qua Enhanced Sync Service)
-      final syncService = OfflineSyncService();
-      await syncService.addTransactionOffline(transaction);
-
-      print('✅ Transaction added offline-first: ${transaction.id}');
+      print('✅ Transaction added offline-first: $transactionId');
     } catch (e) {
-      print("❌ Error adding transaction offline: $e");
+      print("❌ Error adding transaction: $e");
       rethrow;
     }
   }
 
+  /// FIX: Enhanced wallet creation with offline support
   Future<void> addWalletOffline(
     String name,
     double initialBalance,
@@ -218,17 +84,14 @@ class DatabaseService {
 
     try {
       final newWallet = Wallet(
-        id: DateTime.now().millisecondsSinceEpoch.toString(), // Tạo ID tạm thời
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
         name: name,
         balance: initialBalance,
         ownerId: ownerId,
         isVisibleToPartner: true,
       );
 
-      // Offline-first approach
-      final syncService = OfflineSyncService();
-      await syncService.addWalletOffline(newWallet);
-
+      await _syncService.addWalletOffline(newWallet);
       print('✅ Wallet added offline-first: ${newWallet.id}');
     } catch (e) {
       print("❌ Error adding wallet offline: $e");
@@ -236,7 +99,7 @@ class DatabaseService {
     }
   }
 
-  // Thêm method mới cho offline-first category
+  /// FIX: Enhanced category creation with offline support
   Future<void> addCategoryOffline(String name, String type) async {
     if (_uid == null) return;
 
@@ -248,10 +111,7 @@ class DatabaseService {
         type: type,
       );
 
-      // Offline-first approach
-      final syncService = OfflineSyncService();
-      await syncService.addCategoryOffline(newCategory);
-
+      await _syncService.addCategoryOffline(newCategory);
       print('✅ Category added offline-first: ${newCategory.id}');
     } catch (e) {
       print("❌ Error adding category offline: $e");
@@ -259,240 +119,281 @@ class DatabaseService {
     }
   }
 
-  // FIX: updateTransaction - Sửa logic balance update
-  Future<void> updateTransaction(
-    TransactionModel newTransaction,
-    TransactionModel oldTransaction,
-  ) async {
-    if (_uid == null) return;
+  // ============ ENHANCED WALLET METHODS ============
 
-    // 1. Cập nhật bản ghi giao dịch
-    await _dbRef
-        .child('transactions')
-        .child(newTransaction.id)
-        .set(newTransaction.toJson());
+  /// FIX: Get wallets with offline fallback
+  Stream<List<Wallet>> getWalletsStream(UserProvider userProvider) {
+    if (_uid == null) return Stream.value([]);
 
-    // 2. FIX: Xử lý cập nhật số dư ví
-    final newWalletRef = _dbRef.child('wallets').child(newTransaction.walletId);
-    final oldWalletRef = _dbRef.child('wallets').child(oldTransaction.walletId);
+    // Start with offline data
+    final controller = StreamController<List<Wallet>>();
+    bool hasEmittedOfflineData = false;
 
-    // Helper function để tính giá trị thay đổi balance
-    double getBalanceChange(TransactionModel trans) {
-      switch (trans.type) {
-        case TransactionType.income:
-          return trans.amount;
-        case TransactionType.expense:
-          return -trans.amount;
-        case TransactionType.transfer:
-          return -trans.amount;
+    // Load offline data first
+    _loadOfflineWallets(userProvider).then((offlineWallets) {
+      if (offlineWallets.isNotEmpty) {
+        controller.add(offlineWallets);
+        hasEmittedOfflineData = true;
       }
-    }
+    });
 
-    if (newTransaction.walletId == oldTransaction.walletId) {
-      // Cùng ví: Tính chênh lệch
-      final oldChange = getBalanceChange(oldTransaction);
-      final newChange = getBalanceChange(newTransaction);
-      final difference = newChange - oldChange;
+    // Setup Firebase stream
+    StreamSubscription? firebaseSubscription;
 
-      await newWalletRef
-          .child('balance')
-          .set(ServerValue.increment(difference));
+    if (userProvider.partnershipId == null || userProvider.partnerUid == null) {
+      // Single user wallet stream
+      final walletRef = _dbRef
+          .child('wallets')
+          .orderByChild('ownerId')
+          .equalTo(_uid);
+
+      firebaseSubscription = walletRef.onValue.listen(
+        (event) {
+          final List<Wallet> wallets = [];
+          if (event.snapshot.exists) {
+            final walletMap = event.snapshot.value as Map<dynamic, dynamic>;
+            walletMap.forEach((key, value) {
+              final snapshot = event.snapshot.child(key);
+              wallets.add(Wallet.fromSnapshot(snapshot));
+            });
+          }
+          controller.add(wallets);
+        },
+        onError: (error) {
+          print('❌ Firebase wallet stream error: $error');
+          if (!hasEmittedOfflineData) {
+            _loadOfflineWallets(userProvider).then((offlineWallets) {
+              controller.add(offlineWallets);
+            });
+          }
+        },
+      );
     } else {
-      // Khác ví: Hoàn tác cũ và áp dụng mới
-      final oldReversal = -getBalanceChange(oldTransaction);
-      final newChange = getBalanceChange(newTransaction);
+      // Partnership wallet stream
+      final pId = userProvider.partnershipId!;
+      final partnerUid = userProvider.partnerUid!;
 
-      await oldWalletRef
-          .child('balance')
-          .set(ServerValue.increment(oldReversal));
-      await newWalletRef.child('balance').set(ServerValue.increment(newChange));
+      firebaseSubscription = _dbRef
+          .child('wallets')
+          .onValue
+          .listen(
+            (event) {
+              final List<Wallet> visibleWallets = [];
+              if (event.snapshot.exists) {
+                final allWalletsMap =
+                    event.snapshot.value as Map<dynamic, dynamic>;
+                allWalletsMap.forEach((key, value) {
+                  final walletSnapshot = event.snapshot.child(key);
+                  final wallet = Wallet.fromSnapshot(walletSnapshot);
+
+                  if (wallet.ownerId == _uid) {
+                    visibleWallets.add(wallet);
+                  } else if (wallet.ownerId == pId) {
+                    visibleWallets.add(wallet);
+                  } else if (wallet.ownerId == partnerUid &&
+                      wallet.isVisibleToPartner) {
+                    visibleWallets.add(wallet);
+                  }
+                });
+              }
+              controller.add(visibleWallets);
+            },
+            onError: (error) {
+              print('❌ Firebase partnership wallet stream error: $error');
+              if (!hasEmittedOfflineData) {
+                _loadOfflineWallets(userProvider).then((offlineWallets) {
+                  controller.add(offlineWallets);
+                });
+              }
+            },
+          );
     }
 
-    // 3. Lưu mô tả mới
-    if (newTransaction.description.isNotEmpty) {
-      await saveDescriptionToHistory(newTransaction.description);
-    }
+    controller.onCancel = () {
+      firebaseSubscription?.cancel();
+    };
+
+    return controller.stream;
   }
 
-  // FIX: deleteTransaction - Sửa logic hoàn tác balance
-  Future<void> deleteTransaction(TransactionModel transaction) async {
-    if (_uid == null) return;
-
+  /// Helper method to load offline wallets
+  Future<List<Wallet>> _loadOfflineWallets(UserProvider userProvider) async {
     try {
-      // 1. Xóa bản ghi giao dịch
-      await _dbRef.child('transactions').child(transaction.id).remove();
+      if (userProvider.partnershipId != null) {
+        // Load both personal and partnership wallets
+        final personalWallets = await _syncService.getWallets(_uid!);
+        final partnershipWallets = await _syncService.getWallets(
+          userProvider.partnershipId!,
+        );
 
-      // 2. FIX: Hoàn tác ảnh hưởng lên số dư ví
-      final walletRef = _dbRef.child('wallets').child(transaction.walletId);
+        // Combine and deduplicate
+        final allWallets = <String, Wallet>{};
+        for (final wallet in personalWallets) {
+          allWallets[wallet.id] = wallet;
+        }
+        for (final wallet in partnershipWallets) {
+          allWallets[wallet.id] = wallet;
+        }
 
-      double reversalAmount = 0;
-      switch (transaction.type) {
-        case TransactionType.income:
-          reversalAmount = -transaction.amount; // Trừ lại số đã cộng
-          break;
-        case TransactionType.expense:
-          reversalAmount = transaction.amount; // Cộng lại số đã trừ
-          break;
-        case TransactionType.transfer:
-          reversalAmount = transaction.amount; // Cộng lại số đã trừ
-          break;
+        return allWallets.values.toList();
+      } else {
+        return await _syncService.getWallets(_uid!);
       }
-
-      await walletRef
-          .child('balance')
-          .set(ServerValue.increment(reversalAmount));
     } catch (e) {
-      print("Lỗi khi xóa giao dịch: $e");
-      rethrow;
+      print('❌ Error loading offline wallets: $e');
+      return [];
     }
   }
 
-  // FIX: addTransferTransaction - Đảm bảo logic chuyển tiền đúng
-  Future<void> addTransferTransaction({
-    required String fromWalletId,
-    required String toWalletId,
-    required double amount,
-    String? description,
-    required String fromWalletName,
-    required String toWalletName,
-  }) async {
-    if (_uid == null) return;
-    final userId = _uid!;
-    final date = DateTime.now();
+  Stream<List<Wallet>> getSelectableWalletsStream(UserProvider userProvider) {
+    if (_uid == null) return Stream.value([]);
 
-    final finalDescription = description != null && description.isNotEmpty
-        ? description
-        : 'Chuyển tiền';
+    return _dbRef
+        .child('wallets')
+        .onValue
+        .map((event) {
+          final List<Wallet> selectableWallets = [];
+          if (event.snapshot.exists) {
+            final allWalletsMap = event.snapshot.value as Map<dynamic, dynamic>;
+            allWalletsMap.forEach((key, value) {
+              final walletSnapshot = event.snapshot.child(key);
+              final wallet = Wallet.fromSnapshot(walletSnapshot);
 
-    // Tạo giao dịch TRANSFER cho ví nguồn
-    final fromTrans = TransactionModel(
-      id: '',
-      amount: amount,
-      type: TransactionType.transfer,
-      walletId: fromWalletId,
-      date: date,
-      description: 'Chuyển đến: $toWalletName',
-      userId: userId,
-      transferToWalletId: toWalletId,
-    );
-
-    // Tạo giao dịch TRANSFER cho ví đích (với amount dương)
-    // final toTrans = TransactionModel(
-    //   id: '',
-    //   amount: amount,
-    //   type: TransactionType.transfer,
-    //   walletId: toWalletId,
-    //   date: date,
-    //   description: 'Nhận từ: $fromWalletName',
-    //   userId: userId,
-    //   transferToWalletId: fromWalletId, // Ngược lại để trace
-    // );
-
-    // Lưu cả hai giao dịch
-    final transRef = _dbRef.child('transactions');
-    await transRef.push().set(fromTrans.toJson());
-    // await transRef.push().set(toTrans.toJson());
-
-    // Cập nhật số dư: Trừ từ ví nguồn, cộng vào ví đích
-    final fromWalletRef = _dbRef.child('wallets').child(fromWalletId);
-    final toWalletRef = _dbRef.child('wallets').child(toWalletId);
-
-    await fromWalletRef.child('balance').set(ServerValue.increment(-amount));
-    await toWalletRef.child('balance').set(ServerValue.increment(amount));
-
-    // Lưu mô tả
-    if (finalDescription.isNotEmpty) {
-      await saveDescriptionToHistory(finalDescription);
-    }
+              if (wallet.ownerId == _uid ||
+                  wallet.ownerId == userProvider.partnershipId) {
+                selectableWallets.add(wallet);
+              }
+            });
+          }
+          return selectableWallets;
+        })
+        .handleError((error) {
+          print('❌ Selectable wallets stream error, falling back to offline');
+          return _loadOfflineWallets(userProvider);
+        });
   }
 
-  // THÊM: Lấy categories theo type (income/expense)
+  // ============ ENHANCED CATEGORY METHODS ============
+
   Stream<List<Category>> getCategoriesByTypeStream(String type) {
     if (_uid == null) return Stream.value([]);
 
-    final categoryRef = _dbRef.child('categories').child(_uid!);
-    return categoryRef.onValue.map((event) {
-      final List<Category> categories = [];
-      if (event.snapshot.exists) {
-        final map = event.snapshot.value as Map<dynamic, dynamic>;
-        map.forEach((key, value) {
-          final snapshot = event.snapshot.child(key);
-          final category = Category.fromSnapshot(snapshot);
-          if (category.type == type) {
-            categories.add(category);
-          }
-        });
+    final controller = StreamController<List<Category>>();
+    bool hasEmittedOfflineData = false;
+
+    // Load offline data first
+    _syncService.getCategories(userId: _uid!, type: type).then((
+      offlineCategories,
+    ) {
+      if (offlineCategories.isNotEmpty) {
+        controller.add(offlineCategories);
+        hasEmittedOfflineData = true;
       }
-      return categories;
     });
+
+    // Setup Firebase stream
+    final categoryRef = _dbRef.child('categories').child(_uid!);
+    final firebaseSubscription = categoryRef.onValue.listen(
+      (event) {
+        final List<Category> categories = [];
+        if (event.snapshot.exists) {
+          final map = event.snapshot.value as Map<dynamic, dynamic>;
+          map.forEach((key, value) {
+            final snapshot = event.snapshot.child(key);
+            final category = Category.fromSnapshot(snapshot);
+            if (category.type == type) {
+              categories.add(category);
+            }
+          });
+        }
+        controller.add(categories);
+      },
+      onError: (error) {
+        print('❌ Firebase category stream error: $error');
+        if (!hasEmittedOfflineData) {
+          _syncService.getCategories(userId: _uid!, type: type).then((
+            offlineCategories,
+          ) {
+            controller.add(offlineCategories);
+          });
+        }
+      },
+    );
+
+    controller.onCancel = () {
+      firebaseSubscription?.cancel();
+    };
+
+    return controller.stream;
   }
 
-  // Giữ nguyên method getCategoriesStream() cho backward compatibility
   Stream<List<Category>> getCategoriesStream() {
     if (_uid == null) return Stream.value([]);
-    final categoryRef = _dbRef.child('categories').child(_uid!);
-    return categoryRef.onValue.map((event) {
-      final List<Category> categories = [];
-      if (event.snapshot.exists) {
-        final map = event.snapshot.value as Map<dynamic, dynamic>;
-        map.forEach((key, value) {
-          final snapshot = event.snapshot.child(key);
-          categories.add(Category.fromSnapshot(snapshot));
-        });
+
+    final controller = StreamController<List<Category>>();
+    bool hasEmittedOfflineData = false;
+
+    // Load offline data first
+    _syncService.getCategories(userId: _uid!).then((offlineCategories) {
+      if (offlineCategories.isNotEmpty) {
+        controller.add(offlineCategories);
+        hasEmittedOfflineData = true;
       }
-      return categories;
     });
+
+    // Setup Firebase stream
+    final categoryRef = _dbRef.child('categories').child(_uid!);
+    final firebaseSubscription = categoryRef.onValue.listen(
+      (event) {
+        final List<Category> categories = [];
+        if (event.snapshot.exists) {
+          final map = event.snapshot.value as Map<dynamic, dynamic>;
+          map.forEach((key, value) {
+            final snapshot = event.snapshot.child(key);
+            categories.add(Category.fromSnapshot(snapshot));
+          });
+        }
+        controller.add(categories);
+      },
+      onError: (error) {
+        print('❌ Firebase category stream error: $error');
+        if (!hasEmittedOfflineData) {
+          _syncService.getCategories(userId: _uid!).then((offlineCategories) {
+            controller.add(offlineCategories);
+          });
+        }
+      },
+    );
+
+    controller.onCancel = () {
+      firebaseSubscription?.cancel();
+    };
+
+    return controller.stream;
   }
 
-  // Thêm một ví mới
-  Future<void> addWallet(
-    String name,
-    double initialBalance,
-    String ownerId,
-  ) async {
-    if (_uid == null) return;
-    try {
-      final newWalletRef = _dbRef.child('wallets').push();
-      final newWallet = Wallet(
-        id: newWalletRef.key!,
-        name: name,
-        balance: initialBalance,
-        ownerId: ownerId,
-        isVisibleToPartner: true,
-      );
-      await newWalletRef.set(newWallet.toJson());
-      await _localDb.saveWalletLocally(newWallet, syncStatus: 1);
-    } catch (e) {
-      print("Lỗi khi thêm ví: $e");
-      rethrow;
-    }
-  }
+  // ============ ENHANCED TRANSACTION STREAMS ============
 
-  Future<void> addCategory(String name, String type) async {
-    if (_uid == null) return;
-    try {
-      final newCategoryRef = _dbRef.child('categories').child(_uid!).push();
-      final newCategory = Category(
-        id: newCategoryRef.key!,
-        name: name,
-        ownerId: _uid!,
-        type: type,
-      );
-      await newCategoryRef.set(newCategory.toJson());
-      await _localDb.saveCategoryLocally(newCategory, syncStatus: 1);
-    } catch (e) {
-      print("Lỗi khi thêm danh mục: $e");
-      rethrow;
-    }
-  }
-
-  // Các method khác giữ nguyên từ code cũ...
   Stream<List<TransactionModel>> getRecentTransactionsStream(
     UserProvider userProvider, {
     int limit = 15,
   }) {
     if (_uid == null) return Stream.value([]);
 
+    final controller = StreamController<List<TransactionModel>>();
+    bool hasEmittedOfflineData = false;
+
+    // Load offline data first
+    _loadOfflineTransactions(userProvider, limit: limit).then((
+      offlineTransactions,
+    ) {
+      if (offlineTransactions.isNotEmpty) {
+        controller.add(offlineTransactions);
+        hasEmittedOfflineData = true;
+      }
+    });
+
+    // Setup Firebase streams
     final walletsStream = getWalletsStream(userProvider);
     final categoriesStream = getCategoriesStream();
 
@@ -501,6 +402,7 @@ class DatabaseService {
         .orderByChild('userId')
         .equalTo(_uid)
         .limitToLast(limit);
+
     final recentTransStream = transRef.onValue
         .map((event) {
           final List<TransactionModel> transactions = [];
@@ -515,74 +417,131 @@ class DatabaseService {
           return transactions;
         })
         .handleError((error) {
-          print('❌ Firebase stream error, falling back to local: $error');
+          print('❌ Firebase transaction stream error: $error');
           return <TransactionModel>[];
         });
 
-    return StreamZip([walletsStream, categoriesStream, recentTransStream]).map((
-      results,
-    ) {
-      final List<Wallet> wallets = results[0] as List<Wallet>;
-      final List<Category> categories = results[1] as List<Category>;
-      final List<TransactionModel> transactions =
-          results[2] as List<TransactionModel>;
+    final combinedSubscription =
+        StreamZip([walletsStream, categoriesStream, recentTransStream]).listen(
+          (results) {
+            final List<Wallet> wallets = results[0] as List<Wallet>;
+            final List<Category> categories = results[1] as List<Category>;
+            final List<TransactionModel> transactions =
+                results[2] as List<TransactionModel>;
 
-      return transactions.map((trans) {
-        final wallet = wallets.firstWhere(
-          (w) => w.id == trans.walletId,
-          orElse: () =>
-              Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: ''),
+            final enrichedTransactions = _enrichTransactionsWithNames(
+              transactions,
+              wallets,
+              categories,
+            );
+
+            controller.add(enrichedTransactions);
+          },
+          onError: (error) {
+            print('❌ Combined stream error: $error');
+            if (!hasEmittedOfflineData) {
+              _loadOfflineTransactions(userProvider, limit: limit).then((
+                offlineTransactions,
+              ) {
+                controller.add(offlineTransactions);
+              });
+            }
+          },
         );
 
-        String categoryName = 'Không có';
-        String subCategoryName = '';
+    controller.onCancel = () {
+      combinedSubscription?.cancel();
+    };
 
-        if (trans.categoryId != null) {
-          final category = categories.firstWhere(
-            (c) => c.id == trans.categoryId,
-            orElse: () => const Category(
+    return controller.stream;
+  }
+
+  /// Helper method to load offline transactions
+  Future<List<TransactionModel>> _loadOfflineTransactions(
+    UserProvider userProvider, {
+    int? limit,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    try {
+      final transactions = await _syncService.getTransactions(
+        userId: _uid!,
+        startDate: startDate ?? DateTime(2020),
+        endDate: endDate ?? DateTime.now().add(const Duration(days: 1)),
+        limit: limit,
+      );
+
+      // Get offline wallets and categories to enrich data
+      final wallets = await _loadOfflineWallets(userProvider);
+      final categories = await _syncService.getCategories(userId: _uid!);
+
+      return _enrichTransactionsWithNames(transactions, wallets, categories);
+    } catch (e) {
+      print('❌ Error loading offline transactions: $e');
+      return [];
+    }
+  }
+
+  /// Helper method to enrich transactions with wallet and category names
+  List<TransactionModel> _enrichTransactionsWithNames(
+    List<TransactionModel> transactions,
+    List<Wallet> wallets,
+    List<Category> categories,
+  ) {
+    final walletsMap = {for (var w in wallets) w.id: w};
+    final categoriesMap = {for (var c in categories) c.id: c};
+
+    return transactions.map((trans) {
+      final wallet =
+          walletsMap[trans.walletId] ??
+          Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: '');
+
+      String categoryName = 'Không có';
+      String subCategoryName = '';
+
+      if (trans.categoryId != null) {
+        final category =
+            categoriesMap[trans.categoryId] ??
+            const Category(
               id: '',
               name: 'Danh mục đã xóa',
               ownerId: '',
               type: 'expense',
-            ),
-          );
-          categoryName = category.name;
+            );
+        categoryName = category.name;
 
-          if (trans.subCategoryId != null &&
-              category.subCategories.containsKey(trans.subCategoryId)) {
-            subCategoryName = category.subCategories[trans.subCategoryId]!;
-          }
+        if (trans.subCategoryId != null &&
+            category.subCategories.containsKey(trans.subCategoryId)) {
+          subCategoryName = category.subCategories[trans.subCategoryId]!;
         }
+      }
 
-        String transferFromWalletName = '';
-        String transferToWalletName = '';
+      String transferFromWalletName = '';
+      String transferToWalletName = '';
 
-        if (trans.type == TransactionType.transfer &&
-            trans.transferToWalletId != null) {
-          final targetWallet = wallets.firstWhere(
-            (w) => w.id == trans.transferToWalletId,
-            orElse: () =>
-                Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: ''),
-          );
-          if (trans.description.contains('Chuyển đến:')) {
-            transferFromWalletName = wallet.name;
-            transferToWalletName = targetWallet.name;
-          } else {
-            transferFromWalletName = targetWallet.name;
-            transferToWalletName = wallet.name;
-          }
+      if (trans.type == TransactionType.transfer &&
+          trans.transferToWalletId != null) {
+        final targetWallet =
+            walletsMap[trans.transferToWalletId] ??
+            Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: '');
+
+        if (trans.description.contains('Chuyển đến:')) {
+          transferFromWalletName = wallet.name;
+          transferToWalletName = targetWallet.name;
+        } else {
+          transferFromWalletName = targetWallet.name;
+          transferToWalletName = wallet.name;
         }
+      }
 
-        return trans.copyWith(
-          walletName: wallet.name,
-          categoryName: categoryName,
-          subCategoryName: subCategoryName,
-          transferFromWalletName: transferFromWalletName,
-          transferToWalletName: transferToWalletName,
-        );
-      }).toList();
-    });
+      return trans.copyWith(
+        walletName: wallet.name,
+        categoryName: categoryName,
+        subCategoryName: subCategoryName,
+        transferFromWalletName: transferFromWalletName,
+        transferToWalletName: transferToWalletName,
+      );
+    }).toList();
   }
 
   Stream<List<TransactionModel>> getTransactionsStream(
@@ -594,128 +553,135 @@ class DatabaseService {
       return Stream.value([]);
     }
 
-    return getWalletsStream(userProvider).asyncMap((visibleWallets) async {
-      final visibleWalletIds = visibleWallets.map((w) => w.id).toSet();
-      if (visibleWalletIds.isEmpty) {
-        return <TransactionModel>[];
+    final controller = StreamController<List<TransactionModel>>();
+    bool hasEmittedOfflineData = false;
+
+    // Load offline data first
+    _loadOfflineTransactions(
+      userProvider,
+      startDate: startDate,
+      endDate: endDate,
+    ).then((offlineTransactions) {
+      if (offlineTransactions.isNotEmpty) {
+        controller.add(offlineTransactions);
+        hasEmittedOfflineData = true;
       }
-
-      final currentUserTransactionsSnapshot = await _dbRef
-          .child('transactions')
-          .orderByChild('userId')
-          .equalTo(userProvider.currentUser!.uid)
-          .get();
-
-      DataSnapshot? partnerTransactionsSnapshot;
-      if (userProvider.partnerUid != null) {
-        partnerTransactionsSnapshot = await _dbRef
-            .child('transactions')
-            .orderByChild('userId')
-            .equalTo(userProvider.partnerUid)
-            .get();
-      }
-      final allTransactions = <TransactionModel>[];
-
-      if (currentUserTransactionsSnapshot.exists) {
-        (currentUserTransactionsSnapshot.value as Map).forEach((key, value) {
-          allTransactions.add(
-            TransactionModel.fromSnapshot(
-              currentUserTransactionsSnapshot.child(key),
-            ),
-          );
-        });
-      }
-
-      if (partnerTransactionsSnapshot != null &&
-          partnerTransactionsSnapshot.exists) {
-        final partnerSnapshot = partnerTransactionsSnapshot;
-        (partnerSnapshot.value as Map).forEach((key, value) {
-          allTransactions.add(
-            TransactionModel.fromSnapshot(partnerSnapshot.child(key)),
-          );
-        });
-      }
-
-      final partnershipCreationDate = userProvider.partnershipCreationDate;
-
-      final filteredTransactions = allTransactions.where((transaction) {
-        final transactionDate = transaction.date;
-
-        final isWalletVisible = visibleWalletIds.contains(transaction.walletId);
-        if (!isWalletVisible) return false;
-
-        final isDateInRange =
-            transactionDate.isAfter(
-              startDate.subtract(const Duration(days: 1)),
-            ) &&
-            transactionDate.isBefore(endDate.add(const Duration(days: 1)));
-        if (!isDateInRange) return false;
-
-        if (transaction.userId == userProvider.partnerUid) {
-          return partnershipCreationDate != null &&
-              transactionDate.isAfter(partnershipCreationDate);
-        }
-
-        return true;
-      }).toList();
-
-      filteredTransactions.sort((a, b) => b.date.compareTo(a.date));
-      // Enrich transactions with walletName, categoryName, subCategoryName, transferFromWalletName, transferToWalletName
-      final walletsMap = {for (var w in visibleWallets) w.id: w};
-      final categories = await getCategoriesStream().first;
-      final categoriesMap = {for (var c in categories) c.id: c};
-
-      return filteredTransactions.map((trans) {
-        final wallet =
-            walletsMap[trans.walletId] ??
-            Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: '');
-        String categoryName = 'Không có';
-        String subCategoryName = '';
-
-        if (trans.categoryId != null) {
-          final category =
-              categoriesMap[trans.categoryId] ??
-              Category(
-                id: '',
-                name: 'Danh mục đã xóa',
-                ownerId: '',
-                type: 'expense',
-              );
-          categoryName = category.name;
-
-          if (trans.subCategoryId != null &&
-              category.subCategories.containsKey(trans.subCategoryId)) {
-            subCategoryName = category.subCategories[trans.subCategoryId]!;
-          }
-        }
-
-        String transferFromWalletName = '';
-        String transferToWalletName = '';
-
-        if (trans.type == TransactionType.transfer &&
-            trans.transferToWalletId != null) {
-          final targetWallet =
-              walletsMap[trans.transferToWalletId] ??
-              Wallet(id: '', name: 'Ví đã xóa', balance: 0, ownerId: '');
-          if (trans.description.contains('Chuyển đến:')) {
-            transferFromWalletName = wallet.name;
-            transferToWalletName = targetWallet.name;
-          } else {
-            transferFromWalletName = targetWallet.name;
-            transferToWalletName = wallet.name;
-          }
-        }
-
-        return trans.copyWith(
-          walletName: wallet.name,
-          categoryName: categoryName,
-          subCategoryName: subCategoryName,
-          transferFromWalletName: transferFromWalletName,
-          transferToWalletName: transferToWalletName,
-        );
-      }).toList();
     });
+
+    // Setup Firebase data fetching
+    getWalletsStream(userProvider)
+        .asyncMap((visibleWallets) async {
+          final visibleWalletIds = visibleWallets.map((w) => w.id).toSet();
+          if (visibleWalletIds.isEmpty) {
+            return <TransactionModel>[];
+          }
+
+          try {
+            final currentUserTransactionsSnapshot = await _dbRef
+                .child('transactions')
+                .orderByChild('userId')
+                .equalTo(userProvider.currentUser!.uid)
+                .get();
+
+            DataSnapshot? partnerTransactionsSnapshot;
+            if (userProvider.partnerUid != null) {
+              partnerTransactionsSnapshot = await _dbRef
+                  .child('transactions')
+                  .orderByChild('userId')
+                  .equalTo(userProvider.partnerUid)
+                  .get();
+            }
+
+            final allTransactions = <TransactionModel>[];
+
+            if (currentUserTransactionsSnapshot.exists) {
+              (currentUserTransactionsSnapshot.value as Map).forEach((
+                key,
+                value,
+              ) {
+                allTransactions.add(
+                  TransactionModel.fromSnapshot(
+                    currentUserTransactionsSnapshot.child(key),
+                  ),
+                );
+              });
+            }
+
+            if (partnerTransactionsSnapshot != null &&
+                partnerTransactionsSnapshot.exists) {
+              (partnerTransactionsSnapshot.value as Map).forEach((key, value) {
+                allTransactions.add(
+                  TransactionModel.fromSnapshot(
+                    partnerTransactionsSnapshot!.child(key),
+                  ),
+                );
+              });
+            }
+
+            final partnershipCreationDate =
+                userProvider.partnershipCreationDate;
+
+            final filteredTransactions = allTransactions.where((transaction) {
+              final transactionDate = transaction.date;
+
+              final isWalletVisible = visibleWalletIds.contains(
+                transaction.walletId,
+              );
+              if (!isWalletVisible) return false;
+
+              final isDateInRange =
+                  transactionDate.isAfter(
+                    startDate.subtract(const Duration(days: 1)),
+                  ) &&
+                  transactionDate.isBefore(
+                    endDate.add(const Duration(days: 1)),
+                  );
+              if (!isDateInRange) return false;
+
+              if (transaction.userId == userProvider.partnerUid) {
+                return partnershipCreationDate != null &&
+                    transactionDate.isAfter(partnershipCreationDate);
+              }
+
+              return true;
+            }).toList();
+
+            filteredTransactions.sort((a, b) => b.date.compareTo(a.date));
+
+            // Enrich transactions
+            final categories = await getCategoriesStream().first;
+            return _enrichTransactionsWithNames(
+              filteredTransactions,
+              visibleWallets,
+              categories,
+            );
+          } catch (e) {
+            print('❌ Error fetching Firebase transactions: $e');
+            return <TransactionModel>[];
+          }
+        })
+        .listen(
+          (transactions) {
+            controller.add(transactions);
+          },
+          onError: (error) {
+            print('❌ Transaction stream error: $error');
+            if (!hasEmittedOfflineData) {
+              _loadOfflineTransactions(
+                userProvider,
+                startDate: startDate,
+                endDate: endDate,
+              ).then((offlineTransactions) {
+                controller.add(offlineTransactions);
+              });
+            }
+          },
+        );
+
+    return controller.stream;
   }
+
+  // ============ ENHANCED REPORT DATA METHODS ============
 
   Future<ReportData> getReportData(
     UserProvider userProvider,
@@ -726,22 +692,76 @@ class DatabaseService {
       throw Exception('Người dùng chưa đăng nhập');
     }
 
-    final visibleWallets = await getWalletsStream(userProvider).first;
-    if (visibleWallets.isEmpty) {
-      return ReportData(
-        expenseByCategory: {},
-        incomeByCategory: {},
-        rawTransactions: [],
+    try {
+      // Try to get data from streams first, fallback to offline if needed
+      final transactions =
+          await getTransactionsStream(
+            userProvider,
+            startDate,
+            endDate,
+          ).first.timeout(
+            const Duration(seconds: 10),
+            onTimeout: () async {
+              print('⚠️ Firebase timeout, using offline data');
+              return await _loadOfflineTransactions(
+                userProvider,
+                startDate: startDate,
+                endDate: endDate,
+              );
+            },
+          );
+
+      final categories = await getCategoriesStream().first.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () async {
+          print('⚠️ Categories timeout, using offline data');
+          return await _syncService.getCategories(userId: _uid!);
+        },
+      );
+
+      final wallets = await getWalletsStream(userProvider).first.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () async {
+          print('⚠️ Wallets timeout, using offline data');
+          return await _loadOfflineWallets(userProvider);
+        },
+      );
+
+      return _processReportData(
+        transactions,
+        categories,
+        wallets,
+        userProvider,
+      );
+    } catch (e) {
+      print('❌ Error getting report data, falling back to offline: $e');
+
+      // Complete offline fallback
+      final offlineTransactions = await _loadOfflineTransactions(
+        userProvider,
+        startDate: startDate,
+        endDate: endDate,
+      );
+
+      final offlineCategories = await _syncService.getCategories(userId: _uid!);
+      final offlineWallets = await _loadOfflineWallets(userProvider);
+
+      return _processReportData(
+        offlineTransactions,
+        offlineCategories,
+        offlineWallets,
+        userProvider,
       );
     }
+  }
 
-    final allUserCategories = await getCategoriesStream().first;
-    final validTransactions = await getTransactionsStream(
-      userProvider,
-      startDate,
-      endDate,
-    ).first;
-
+  /// Helper method to process report data
+  ReportData _processReportData(
+    List<TransactionModel> transactions,
+    List<Category> categories,
+    List<Wallet> wallets,
+    UserProvider userProvider,
+  ) {
     double personalIncome = 0;
     double personalExpense = 0;
     double sharedIncome = 0;
@@ -749,9 +769,9 @@ class DatabaseService {
     Map<Category, double> expenseByCategory = {};
     Map<Category, double> incomeByCategory = {};
 
-    final walletOwnerMap = {for (var w in visibleWallets) w.id: w.ownerId};
+    final walletOwnerMap = {for (var w in wallets) w.id: w.ownerId};
 
-    for (final transaction in validTransactions) {
+    for (final transaction in transactions) {
       final ownerId = walletOwnerMap[transaction.walletId];
       final bool isShared = ownerId == userProvider.partnershipId;
 
@@ -763,7 +783,7 @@ class DatabaseService {
         }
 
         if (transaction.categoryId != null) {
-          final category = allUserCategories.firstWhere(
+          final category = categories.firstWhere(
             (c) => c.id == transaction.categoryId,
             orElse: () => Category(
               id: 'unknown_income',
@@ -786,7 +806,7 @@ class DatabaseService {
         }
 
         if (transaction.categoryId != null) {
-          final category = allUserCategories.firstWhere(
+          final category = categories.firstWhere(
             (c) => c.id == transaction.categoryId,
             orElse: () => Category(
               id: 'unknown_expense',
@@ -804,12 +824,6 @@ class DatabaseService {
       }
     }
 
-    final enrichedTransactions = await _enrichTransactions(
-      validTransactions,
-      visibleWallets,
-      allUserCategories,
-    );
-
     return ReportData(
       totalIncome: personalIncome + sharedIncome,
       totalExpense: personalExpense + sharedExpense,
@@ -819,42 +833,296 @@ class DatabaseService {
       sharedExpense: sharedExpense,
       expenseByCategory: expenseByCategory,
       incomeByCategory: incomeByCategory,
-      rawTransactions: enrichedTransactions,
+      rawTransactions: transactions,
     );
   }
 
-  Future<List<TransactionModel>> _enrichTransactions(
-    List<TransactionModel> transactions,
-    List<Wallet> wallets,
-    List<Category> categories,
-  ) async {
-    final walletMap = {for (var w in wallets) w.id: w.name};
-    final categoryMap = {for (var c in categories) c.id: c};
+  // ============ ENHANCED DESCRIPTION METHODS ============
 
-    return transactions.map((trans) {
-      final walletName = walletMap[trans.walletId] ?? 'Ví đã xóa';
-      String categoryName = 'Không có';
-      String subCategoryName = '';
+  Future<List<String>> getDescriptionHistory() async {
+    if (_uid == null) return [];
 
-      if (trans.categoryId != null &&
-          categoryMap.containsKey(trans.categoryId)) {
-        final category = categoryMap[trans.categoryId]!;
-        categoryName = category.name;
-        if (trans.subCategoryId != null &&
-            category.subCategories.containsKey(trans.subCategoryId)) {
-          subCategoryName = category.subCategories[trans.subCategoryId]!;
-        }
-      } else if (trans.categoryId != null) {
-        categoryName = 'Danh mục đã xóa';
+    try {
+      // Get from offline sync service (enhanced with context)
+      final suggestions = await _syncService.getDescriptionSuggestions(_uid!);
+
+      if (suggestions.isNotEmpty) {
+        return suggestions;
       }
 
-      return trans.copyWith(
-        walletName: walletName,
-        categoryName: categoryName,
-        subCategoryName: subCategoryName,
-      );
-    }).toList();
+      // Fallback to Firebase
+      final snapshot = await _dbRef
+          .child('user_descriptions')
+          .child(_uid!)
+          .get();
+
+      if (snapshot.exists) {
+        final descriptionsMap = snapshot.value as Map<dynamic, dynamic>;
+        final firebaseDescriptions = descriptionsMap.keys
+            .cast<String>()
+            .toList();
+
+        // Cache Firebase descriptions to local DB
+        for (final desc in firebaseDescriptions) {
+          await _syncService.saveDescriptionWithContext(_uid!, desc);
+        }
+
+        return firebaseDescriptions;
+      }
+
+      return [];
+    } catch (e) {
+      print("❌ Error getting description history: $e");
+      return [];
+    }
   }
+
+  Future<void> saveDescriptionToHistory(String description) async {
+    if (_uid == null || description.isEmpty) return;
+
+    try {
+      // Use sync service for enhanced saving with context
+      await _syncService.saveDescriptionWithContext(_uid!, description);
+    } catch (e) {
+      print("⚠️ Warning: Failed to save description: $e");
+    }
+  }
+
+  Future<List<String>> searchDescriptionHistory(
+    String query, {
+    int limit = 5,
+  }) async {
+    if (_uid == null || query.trim().isEmpty) return [];
+
+    try {
+      return await _syncService.searchDescriptionHistory(
+        _uid!,
+        query.trim(),
+        limit: limit,
+      );
+    } catch (e) {
+      print("❌ Error searching description history: $e");
+      return [];
+    }
+  }
+
+  // ============ LEGACY ONLINE-ONLY METHODS (FOR BACKWARD COMPATIBILITY) ============
+
+  Future<void> addWallet(
+    String name,
+    double initialBalance,
+    String ownerId,
+  ) async {
+    if (_uid == null) return;
+
+    try {
+      final newWalletRef = _dbRef.child('wallets').push();
+      final newWallet = Wallet(
+        id: newWalletRef.key!,
+        name: name,
+        balance: initialBalance,
+        ownerId: ownerId,
+        isVisibleToPartner: true,
+      );
+
+      await newWalletRef.set(newWallet.toJson());
+      await _localDb.saveWalletLocally(newWallet, syncStatus: 1);
+    } catch (e) {
+      print("❌ Error adding wallet online: $e");
+      // Fallback to offline
+      await addWalletOffline(name, initialBalance, ownerId);
+    }
+  }
+
+  Future<void> addCategory(String name, String type) async {
+    if (_uid == null) return;
+
+    try {
+      final newCategoryRef = _dbRef.child('categories').child(_uid!).push();
+      final newCategory = Category(
+        id: newCategoryRef.key!,
+        name: name,
+        ownerId: _uid!,
+        type: type,
+      );
+
+      await newCategoryRef.set(newCategory.toJson());
+      await _localDb.saveCategoryLocally(newCategory, syncStatus: 1);
+    } catch (e) {
+      print("❌ Error adding category online: $e");
+      // Fallback to offline
+      await addCategoryOffline(name, type);
+    }
+  }
+
+  Future<void> updateTransaction(
+    TransactionModel newTransaction,
+    TransactionModel oldTransaction,
+  ) async {
+    if (_uid == null) return;
+
+    try {
+      // Update Firebase
+      await _dbRef
+          .child('transactions')
+          .child(newTransaction.id)
+          .set(newTransaction.toJson());
+
+      // Update wallet balance
+      await _updateWalletBalanceForTransaction(newTransaction, oldTransaction);
+
+      // Update local database
+      await _localDb.saveTransactionLocally(newTransaction, syncStatus: 1);
+
+      // Save description
+      if (newTransaction.description.isNotEmpty) {
+        await saveDescriptionToHistory(newTransaction.description);
+      }
+    } catch (e) {
+      print("❌ Error updating transaction: $e");
+      rethrow;
+    }
+  }
+
+  Future<void> _updateWalletBalanceForTransaction(
+    TransactionModel newTransaction,
+    TransactionModel oldTransaction,
+  ) async {
+    try {
+      final newWalletRef = _dbRef
+          .child('wallets')
+          .child(newTransaction.walletId);
+      final oldWalletRef = _dbRef
+          .child('wallets')
+          .child(oldTransaction.walletId);
+
+      double getBalanceChange(TransactionModel trans) {
+        switch (trans.type) {
+          case TransactionType.income:
+            return trans.amount;
+          case TransactionType.expense:
+            return -trans.amount;
+          case TransactionType.transfer:
+            return -trans.amount;
+        }
+      }
+
+      if (newTransaction.walletId == oldTransaction.walletId) {
+        final oldChange = getBalanceChange(oldTransaction);
+        final newChange = getBalanceChange(newTransaction);
+        final difference = newChange - oldChange;
+
+        await newWalletRef
+            .child('balance')
+            .set(ServerValue.increment(difference));
+      } else {
+        final oldReversal = -getBalanceChange(oldTransaction);
+        final newChange = getBalanceChange(newTransaction);
+
+        await oldWalletRef
+            .child('balance')
+            .set(ServerValue.increment(oldReversal));
+        await newWalletRef
+            .child('balance')
+            .set(ServerValue.increment(newChange));
+      }
+    } catch (e) {
+      print("⚠️ Failed to update wallet balance: $e");
+    }
+  }
+
+  Future<void> deleteTransaction(TransactionModel transaction) async {
+    if (_uid == null) return;
+
+    try {
+      // Delete from Firebase
+      await _dbRef.child('transactions').child(transaction.id).remove();
+
+      // Reverse wallet balance changes
+      final walletRef = _dbRef.child('wallets').child(transaction.walletId);
+
+      double reversalAmount = 0;
+      switch (transaction.type) {
+        case TransactionType.income:
+          reversalAmount = -transaction.amount;
+          break;
+        case TransactionType.expense:
+          reversalAmount = transaction.amount;
+          break;
+        case TransactionType.transfer:
+          reversalAmount = transaction.amount;
+          break;
+      }
+
+      await walletRef
+          .child('balance')
+          .set(ServerValue.increment(reversalAmount));
+
+      // Remove from local database
+      final db = await _localDb.database;
+      await db.delete(
+        'transactions',
+        where: 'id = ?',
+        whereArgs: [transaction.id],
+      );
+    } catch (e) {
+      print("❌ Error deleting transaction: $e");
+      rethrow;
+    }
+  }
+
+  Future<void> addTransferTransaction({
+    required String fromWalletId,
+    required String toWalletId,
+    required double amount,
+    String? description,
+    required String fromWalletName,
+    required String toWalletName,
+  }) async {
+    if (_uid == null) return;
+
+    final userId = _uid!;
+    final date = DateTime.now();
+
+    final finalDescription = description != null && description.isNotEmpty
+        ? description
+        : 'Chuyển tiền';
+
+    try {
+      // Create transfer transaction
+      final fromTrans = TransactionModel(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        amount: amount,
+        type: TransactionType.transfer,
+        walletId: fromWalletId,
+        date: date,
+        description: 'Chuyển đến: $toWalletName',
+        userId: userId,
+        transferToWalletId: toWalletId,
+      );
+
+      // Add transaction (will use offline-first approach)
+      await addTransaction(fromTrans);
+
+      // Update wallet balances directly (for immediate effect)
+      try {
+        final fromWalletRef = _dbRef.child('wallets').child(fromWalletId);
+        final toWalletRef = _dbRef.child('wallets').child(toWalletId);
+
+        await fromWalletRef
+            .child('balance')
+            .set(ServerValue.increment(-amount));
+        await toWalletRef.child('balance').set(ServerValue.increment(amount));
+      } catch (e) {
+        print('⚠️ Warning: Could not update wallet balances immediately: $e');
+      }
+    } catch (e) {
+      print("❌ Error adding transfer transaction: $e");
+      rethrow;
+    }
+  }
+
+  // ============ OTHER METHODS (KEEP EXISTING FUNCTIONALITY) ============
 
   Stream<Budget?> getBudgetForMonthStream(String month) {
     if (_uid == null) return Stream.value(null);
@@ -896,7 +1164,7 @@ class DatabaseService {
           .child('isVisibleToPartner')
           .set(isVisible);
     } catch (e) {
-      print("Lỗi khi cập nhật trạng thái hiển thị của ví: $e");
+      print("❌ Error updating wallet visibility: $e");
       rethrow;
     }
   }
@@ -914,7 +1182,7 @@ class DatabaseService {
           .child(categoryId)
           .set(amount);
     } catch (e) {
-      print("Lỗi khi đặt ngân sách cho danh mục: $e");
+      print("❌ Error setting category budget: $e");
       rethrow;
     }
   }
@@ -934,7 +1202,7 @@ class DatabaseService {
 
       await subCategoryRef.set(subCategoryName);
     } catch (e) {
-      print("Lỗi khi thêm danh mục con: $e");
+      print("❌ Error adding sub category: $e");
       rethrow;
     }
   }
@@ -953,82 +1221,12 @@ class DatabaseService {
           .child(subCategoryId)
           .remove();
     } catch (e) {
-      print("Lỗi khi xóa danh mục con: $e");
+      print("❌ Error deleting sub category: $e");
       rethrow;
     }
   }
 
-  Future<List<String>> getDescriptionHistory() async {
-    if (_uid == null) return [];
-
-    try {
-      // Get from local database first (faster)
-      final localSuggestions = await _localDb.getDescriptionSuggestions(_uid!);
-      if (localSuggestions.isNotEmpty) {
-        return localSuggestions;
-      }
-
-      // Fallback to Firebase (existing logic)
-      final snapshot = await _dbRef
-          .child('user_descriptions')
-          .child(_uid!)
-          .get();
-
-      if (snapshot.exists) {
-        final descriptionsMap = snapshot.value as Map<dynamic, dynamic>;
-        final firebaseDescriptions = descriptionsMap.keys
-            .cast<String>()
-            .toList();
-
-        // ✨ Cache Firebase descriptions to local DB
-        for (final desc in firebaseDescriptions) {
-          await _localDb.saveDescriptionToHistory(_uid!, desc);
-        }
-
-        return firebaseDescriptions;
-      }
-
-      return [];
-    } catch (e) {
-      print("❌ Error getting description history: $e");
-      return [];
-    }
-  }
-
-  Future<void> saveDescriptionToHistory(String description) async {
-    if (_uid == null || description.isEmpty) return;
-
-    try {
-      // 1. Save to local database immediately
-      await _localDb.saveDescriptionToHistory(_uid!, description);
-
-      // 2. Try to save to Firebase
-      await _dbRef.child('user_descriptions').child(_uid!).update({
-        description: true,
-      });
-    } catch (e) {
-      // If Firebase fails, local save is already done
-      print("⚠️ Warning: Failed to save description to Firebase: $e");
-    }
-  }
-
-  Future<List<String>> searchDescriptionHistory(
-    String query, {
-    int limit = 5,
-  }) async {
-    if (_uid == null || query.trim().isEmpty) return [];
-
-    try {
-      return await _localDb.searchDescriptionHistory(
-        _uid!,
-        query.trim(),
-        limit: limit,
-      );
-    } catch (e) {
-      print("❌ Error searching description history: $e");
-      return [];
-    }
-  }
+  // ============ PARTNERSHIP METHODS ============
 
   Stream<List<TransactionModel>> getTransactionsForCategoryStream({
     required UserProvider userProvider,
@@ -1063,11 +1261,7 @@ class DatabaseService {
   }
 
   Future<String?> getPartnershipId(String uid) async {
-    final ref = FirebaseDatabase.instance
-        .ref()
-        .child('users')
-        .child(uid)
-        .child('partnershipId');
+    final ref = _dbRef.child('users').child(uid).child('partnershipId');
     final snapshot = await ref.get();
     if (snapshot.exists) {
       return snapshot.value as String?;
@@ -1081,7 +1275,6 @@ class DatabaseService {
     final partnershipRef = _dbRef.child('partnerships').child(partnershipId);
     final userRef = _dbRef.child('users').child(_uid!);
 
-    // Xóa thông tin partnership khỏi user
     await userRef.update({
       'partnershipId': null,
       'partnerUid': null,
@@ -1089,14 +1282,12 @@ class DatabaseService {
       'partnershipCreatedAt': null,
     });
 
-    // Xóa partnership nếu không còn thành viên nào
     final partnershipSnapshot = await partnershipRef.get();
     if (partnershipSnapshot.exists) {
       final members = (partnershipSnapshot.value as Map)['memberIds'] as List;
       if (members.length <= 1) {
         await partnershipRef.remove();
       } else {
-        // Cập nhật danh sách thành viên
         members.remove(_uid);
         await partnershipRef.update({'memberIds': members});
       }
@@ -1166,10 +1357,8 @@ class DatabaseService {
         'lastSyncTime': ServerValue.timestamp,
       };
 
-      // Create partnership
       await _dbRef.child('partnerships').child(partnershipId).set(partnership);
 
-      // Update current user
       await _dbRef.child('users').child(_uid).update({
         'partnershipId': partnershipId,
         'partnerUid': partnerUid,
@@ -1177,7 +1366,6 @@ class DatabaseService {
         'partnershipCreatedAt': ServerValue.timestamp,
       });
 
-      // Update partner
       await _dbRef.child('users').child(partnerUid).update({
         'partnershipId': partnershipId,
         'partnerUid': _uid,
@@ -1185,7 +1373,6 @@ class DatabaseService {
         'partnershipCreatedAt': ServerValue.timestamp,
       });
 
-      // Send notifications
       await Future.wait([
         _sendNotification(
           _uid!,
@@ -1199,13 +1386,12 @@ class DatabaseService {
         ),
       ]);
 
-      // Clean up invite code
       await _dbRef
           .child('inviteCodes')
           .child(inviteCode.toUpperCase())
           .remove();
     } catch (e) {
-      print('Error handling partnership invite: $e');
+      print('❌ Error handling partnership invite: $e');
       rethrow;
     }
   }
@@ -1224,21 +1410,18 @@ class DatabaseService {
         'isRead': false,
       });
     } catch (e) {
-      print('Error sending notification: $e');
+      print('❌ Error sending notification: $e');
     }
   }
 
-  // FIX: Sync partnership on app startup
   Future<void> syncPartnership(String partnershipId) async {
     if (_uid == null) return;
 
     try {
       final partnershipRef = _dbRef.child('partnerships').child(partnershipId);
-
-      // Check if partnership exists
       final partnershipSnapshot = await partnershipRef.get();
+
       if (!partnershipSnapshot.exists) {
-        // Clean up invalid partnership
         await _dbRef.child('users').child(_uid!).update({
           'partnershipId': null,
           'partnerUid': null,
@@ -1248,7 +1431,6 @@ class DatabaseService {
         throw Exception('Partnership không tồn tại');
       }
 
-      // Update sync time
       await partnershipRef.update({
         'lastSyncTime': ServerValue.timestamp,
         'isActive': true,
@@ -1258,10 +1440,12 @@ class DatabaseService {
         'lastSync': ServerValue.timestamp,
       });
     } catch (e) {
-      print('Error syncing partnership: $e');
+      print('❌ Error syncing partnership: $e');
       rethrow;
     }
   }
+
+  // ============ ENHANCED OFFLINE METHODS ============
 
   Future<List<TransactionModel>> getTransactionsOfflineFirst({
     String? userId,
@@ -1270,11 +1454,10 @@ class DatabaseService {
     int? limit,
   }) async {
     try {
-      // Try local database first
-      final localTransactions = await _localDb.getLocalTransactions(
-        userId: userId,
-        startDate: startDate,
-        endDate: endDate,
+      final localTransactions = await _syncService.getTransactions(
+        userId: userId ?? _uid!,
+        startDate: startDate ?? DateTime(2020),
+        endDate: endDate ?? DateTime.now(),
         limit: limit,
       );
 
@@ -1285,10 +1468,7 @@ class DatabaseService {
         return localTransactions;
       }
 
-      // Fallback to Firebase stream conversion
-      print('☁️ Fetching transactions from Firebase...');
-      // Note: In real implementation, you'd want to convert the stream to future
-      // For now, return empty list and let the stream handle the data
+      print('☁️ No local transactions, would need to fetch from Firebase...');
       return [];
     } catch (e) {
       print('❌ Error getting transactions offline-first: $e');
@@ -1296,62 +1476,24 @@ class DatabaseService {
     }
   }
 
-  // ✨ V7: Sync local changes to Firebase
   Future<void> syncLocalChangesToFirebase() async {
     if (_uid == null) return;
 
     try {
-      // Get unsynced transactions
-      final unsyncedTransactions = await _localDb.getUnsyncedRecords(
-        'transactions',
-      );
-      print(
-        '🔄 Syncing ${unsyncedTransactions.length} unsynced transactions...',
-      );
-
-      for (final record in unsyncedTransactions) {
-        try {
-          final transaction = TransactionModel(
-            id: record['id'],
-            amount: record['amount'],
-            type: TransactionType.values.firstWhere(
-              (e) => e.name == record['type'],
-            ),
-            categoryId: record['categoryId'],
-            walletId: record['walletId'],
-            date: DateTime.parse(record['date']),
-            description: record['description'] ?? '',
-            userId: record['userId'],
-            subCategoryId: record['subCategoryId'],
-            transferToWalletId: record['transferToWalletId'],
-          );
-
-          // Upload to Firebase
-          await _dbRef
-              .child('transactions')
-              .child(transaction.id)
-              .set(transaction.toJson());
-
-          // Mark as synced
-          await _localDb.markAsSynced('transactions', transaction.id);
-          print('✅ Synced transaction: ${transaction.id}');
-        } catch (e) {
-          print('❌ Failed to sync transaction ${record['id']}: $e');
-        }
-      }
-
-      print('🎉 Sync completed successfully');
+      // Force sync through the sync service
+      await _syncService.forceSyncNow();
+      print('🎉 Local changes synced to Firebase successfully');
     } catch (e) {
       print('❌ Error syncing local changes: $e');
     }
   }
 
-  // ✨ V7: Database health check
   Future<Map<String, dynamic>> getDatabaseHealth() async {
     try {
       final localStats = await _localDb.getDatabaseStats();
+      final syncStats = _syncService.getSyncStats();
 
-      // Try Firebase connection
+      // Test Firebase connection
       bool firebaseConnected = false;
       try {
         await _dbRef.child('.info/connected').get();
@@ -1362,23 +1504,48 @@ class DatabaseService {
 
       return {
         'localDatabase': localStats,
+        'syncService': syncStats,
         'firebaseConnected': firebaseConnected,
-        'lastSync': DateTime.now().toIso8601String(),
+        'lastHealthCheck': DateTime.now().toIso8601String(),
       };
     } catch (e) {
-      return {'error': e.toString(), 'firebaseConnected': false};
+      return {
+        'error': e.toString(),
+        'firebaseConnected': false,
+        'lastHealthCheck': DateTime.now().toIso8601String(),
+      };
     }
   }
 
-  @override
+  // ============ CONNECTIVITY MANAGEMENT ============
+
+  Future<void> syncWhenOnline() async {
+    final connectivity = Connectivity();
+    connectivity.onConnectivityChanged.listen(
+      (ConnectivityResult result) {
+            if (result != ConnectivityResult.none) {
+              _performSync();
+            }
+          }
+          as void Function(List<ConnectivityResult> event)?,
+    );
+  }
+
+  Future<void> _performSync() async {
+    try {
+      await _syncService.forceSyncNow();
+      print('✅ Connectivity sync completed successfully');
+    } catch (e) {
+      print('❌ Connectivity sync failed: $e');
+    }
+  }
+
+  // ============ ERROR HANDLING ============
+
   void handleError(dynamic error, {String? context}) {
     final errorMessage = context != null
         ? '$context: $error'
         : 'Database error: $error';
-
     print('🚨 $errorMessage');
-
-    // Could add error tracking service here
-    // ErrorTrackingService.logError(error, context);
   }
 }
