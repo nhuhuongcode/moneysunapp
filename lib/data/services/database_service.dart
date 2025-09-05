@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:intl/intl.dart';
@@ -1645,5 +1647,647 @@ class DatabaseService {
           }
           as TransactionHandler,
     );
+  }
+}
+
+class DatabaseServiceEnhanced extends DatabaseService {
+  // ============ ENHANCED CATEGORY METHODS ============
+
+  /// Get categories with ownership filtering
+  Stream<List<Category>> getCategoriesWithOwnershipStream(
+    UserProvider userProvider,
+  ) {
+    if (_uid == null) return Stream.value([]);
+
+    return _dbRef.child('categories').onValue.map((event) {
+      final List<Category> categories = [];
+      if (event.snapshot.exists) {
+        final allCategoriesMap = event.snapshot.value as Map<dynamic, dynamic>;
+        allCategoriesMap.forEach((key, value) {
+          final categorySnapshot = event.snapshot.child(key);
+          final category = Category.fromSnapshot(categorySnapshot);
+
+          // Include personal categories and shared categories
+          if (category.ownerId == _uid ||
+              (userProvider.partnershipId != null &&
+                  category.ownerId == userProvider.partnershipId)) {
+            categories.add(category);
+          }
+        });
+      }
+      return categories..sort((a, b) => a.name.compareTo(b.name));
+    });
+  }
+
+  /// Get categories by type with ownership filtering
+  Stream<List<Category>> getCategoriesByTypeWithOwnershipStream(
+    String type,
+    UserProvider userProvider,
+  ) {
+    return getCategoriesWithOwnershipStream(userProvider).map(
+      (categories) =>
+          categories.where((cat) => cat.type == type && cat.isActive).toList(),
+    );
+  }
+
+  /// Add category with ownership type
+  Future<void> addCategoryWithOwnership(
+    String name,
+    String type,
+    CategoryOwnershipType ownershipType,
+    UserProvider userProvider, {
+    int? iconCodePoint,
+  }) async {
+    if (_uid == null) return;
+
+    try {
+      String ownerId;
+      if (ownershipType == CategoryOwnershipType.shared) {
+        if (userProvider.partnershipId == null) {
+          throw Exception('Không thể tạo danh mục chung khi chưa có đối tác');
+        }
+        ownerId = userProvider.partnershipId!;
+      } else {
+        ownerId = _uid!;
+      }
+
+      final categoryRef = _dbRef.child('categories').push();
+      final category = Category(
+        id: categoryRef.key!,
+        name: name,
+        ownerId: ownerId,
+        type: type,
+        ownershipType: ownershipType,
+        createdBy: _uid,
+        iconCodePoint: iconCodePoint,
+        createdAt: DateTime.now(),
+      );
+
+      await categoryRef.set(category.toJson());
+      await _localDb.saveCategoryLocally(category, syncStatus: 1);
+
+      // Send notification if shared category
+      if (ownershipType == CategoryOwnershipType.shared &&
+          userProvider.partnerUid != null) {
+        await _sendCategoryNotification(
+          userProvider.partnerUid!,
+          'Danh mục chung mới',
+          '${userProvider.currentUser?.displayName ?? "Đối tác"} đã tạo danh mục "$name" chung',
+        );
+      }
+
+      print('✅ Category created successfully: $name (${ownershipType.name})');
+    } catch (e) {
+      print('❌ Error adding category: $e');
+      rethrow;
+    }
+  }
+
+  /// Update category
+  Future<void> updateCategory(Category category) async {
+    if (_uid == null) return;
+
+    try {
+      // Check permissions
+      if (!CategoryValidator.canEdit(category, _uid!)) {
+        throw Exception('Bạn không có quyền chỉnh sửa danh mục này');
+      }
+
+      await _dbRef.child('categories').child(category.id).update({
+        'name': category.name,
+        'iconCodePoint': category.iconCodePoint,
+        'updatedAt': ServerValue.timestamp,
+      });
+
+      await _localDb.saveCategoryLocally(
+        category.copyWith(updatedAt: DateTime.now()),
+        syncStatus: 1,
+      );
+
+      print('✅ Category updated successfully: ${category.name}');
+    } catch (e) {
+      print('❌ Error updating category: $e');
+      rethrow;
+    }
+  }
+
+  /// Archive category instead of deleting
+  Future<void> archiveCategory(String categoryId) async {
+    if (_uid == null) return;
+
+    try {
+      await _dbRef.child('categories').child(categoryId).update({
+        'isArchived': true,
+        'updatedAt': ServerValue.timestamp,
+      });
+
+      print('✅ Category archived successfully');
+    } catch (e) {
+      print('❌ Error archiving category: $e');
+      rethrow;
+    }
+  }
+
+  /// Delete category with safety checks
+  Future<void> deleteCategory(String categoryId) async {
+    if (_uid == null) return;
+
+    try {
+      // Check if category has transactions
+      final hasTransactions = await _checkCategoryHasTransactions(categoryId);
+
+      if (hasTransactions) {
+        throw Exception(
+          'Không thể xóa danh mục này vì đang có giao dịch. Hãy lưu trữ thay vì xóa.',
+        );
+      }
+
+      await _dbRef.child('categories').child(categoryId).remove();
+      await _localDb.deleteCategoryLocally(categoryId);
+
+      print('✅ Category deleted successfully');
+    } catch (e) {
+      print('❌ Error deleting category: $e');
+      rethrow;
+    }
+  }
+
+  Future<bool> _checkCategoryHasTransactions(String categoryId) async {
+    try {
+      final snapshot = await _dbRef
+          .child('transactions')
+          .orderByChild('categoryId')
+          .equalTo(categoryId)
+          .limitToFirst(1)
+          .get();
+
+      return snapshot.exists && snapshot.children.isNotEmpty;
+    } catch (e) {
+      print('Error checking category transactions: $e');
+      return true; // Be safe and assume it has transactions
+    }
+  }
+
+  // ============ ENHANCED BUDGET METHODS ============
+
+  /// Get budgets with ownership filtering
+  Stream<List<Budget>> getBudgetsWithOwnershipStream(
+    UserProvider userProvider,
+  ) {
+    if (_uid == null) return Stream.value([]);
+
+    return _dbRef.child('budgets').onValue.map((event) {
+      final List<Budget> budgets = [];
+      if (event.snapshot.exists) {
+        final allBudgetsMap = event.snapshot.value as Map<dynamic, dynamic>;
+        allBudgetsMap.forEach((key, value) {
+          final budgetSnapshot = event.snapshot.child(key);
+          final budget = Budget.fromSnapshot(budgetSnapshot);
+
+          // Include personal budgets and shared budgets
+          if (budget.ownerId == _uid ||
+              (userProvider.partnershipId != null &&
+                  budget.ownerId == userProvider.partnershipId)) {
+            budgets.add(budget);
+          }
+        });
+      }
+      return budgets..sort((a, b) => b.month.compareTo(a.month));
+    });
+  }
+
+  /// Get budget for month with ownership
+  Stream<Budget?> getBudgetForMonthWithOwnershipStream(
+    String month,
+    BudgetType budgetType,
+    UserProvider userProvider,
+  ) {
+    if (_uid == null) return Stream.value(null);
+
+    String ownerId;
+    if (budgetType == BudgetType.shared) {
+      if (userProvider.partnershipId == null) return Stream.value(null);
+      ownerId = userProvider.partnershipId!;
+    } else {
+      ownerId = _uid!;
+    }
+
+    final budgetRef = _dbRef
+        .child('budgets')
+        .orderByChild('ownerId_month_type')
+        .equalTo('${ownerId}_${month}_${budgetType.name}');
+
+    return budgetRef.onValue.map((event) {
+      if (event.snapshot.exists && event.snapshot.children.isNotEmpty) {
+        return Budget.fromSnapshot(event.snapshot.children.first);
+      }
+      return null;
+    });
+  }
+
+  /// Save budget with ownership
+  Future<void> saveBudgetWithOwnership(
+    Budget budget,
+    UserProvider userProvider,
+  ) async {
+    if (_uid == null) return;
+
+    try {
+      DatabaseReference ref;
+      if (budget.id.isNotEmpty) {
+        ref = _dbRef.child('budgets').child(budget.id);
+      } else {
+        ref = _dbRef.child('budgets').push();
+      }
+
+      final dataToSet = budget
+          .copyWith(
+            id: ref.key!,
+            createdBy: budget.createdBy ?? _uid,
+            updatedAt: DateTime.now(),
+          )
+          .toJson();
+
+      // Add composite key for efficient querying
+      dataToSet['ownerId_month_type'] =
+          '${budget.ownerId}_${budget.month}_${budget.budgetType.name}';
+
+      await ref.set(dataToSet);
+
+      // Send notification if shared budget
+      if (budget.budgetType == BudgetType.shared &&
+          userProvider.partnerUid != null) {
+        await _sendBudgetNotification(
+          userProvider.partnerUid!,
+          'Ngân sách chung được cập nhật',
+          '${userProvider.currentUser?.displayName ?? "Đối tác"} đã ${budget.id.isEmpty ? "tạo" : "cập nhật"} ngân sách chung cho tháng ${budget.month}',
+        );
+      }
+
+      print('✅ Budget saved successfully: ${budget.displayName}');
+    } catch (e) {
+      print('❌ Error saving budget: $e');
+      rethrow;
+    }
+  }
+
+  /// Set category budget with ownership awareness
+  Future<void> setCategoryBudgetWithOwnership(
+    String budgetId,
+    String categoryId,
+    double amount,
+    UserProvider userProvider,
+  ) async {
+    if (_uid == null) return;
+
+    try {
+      await _dbRef
+          .child('budgets')
+          .child(budgetId)
+          .child('categoryAmounts')
+          .child(categoryId)
+          .set(amount);
+
+      await _dbRef
+          .child('budgets')
+          .child(budgetId)
+          .child('updatedAt')
+          .set(ServerValue.timestamp);
+
+      print('✅ Category budget updated successfully');
+    } catch (e) {
+      print('❌ Error updating category budget: $e');
+      rethrow;
+    }
+  }
+
+  /// Get budget analytics with ownership
+  Future<BudgetAnalytics> getBudgetAnalytics(
+    String budgetId,
+    UserProvider userProvider,
+  ) async {
+    try {
+      // Get budget data
+      final budgetSnapshot = await _dbRef
+          .child('budgets')
+          .child(budgetId)
+          .get();
+      if (!budgetSnapshot.exists) {
+        throw Exception('Budget not found');
+      }
+
+      final budget = Budget.fromSnapshot(budgetSnapshot);
+
+      // Get actual spending data
+      final reportData = await getReportData(
+        userProvider,
+        budget.effectiveDateRange.$1,
+        budget.effectiveDateRange.$2,
+      );
+
+      // Calculate analytics
+      double totalSpent = 0;
+      Map<String, CategoryBudgetAnalytics> categoryAnalytics = {};
+      List<BudgetAlert> alerts = [];
+
+      for (final entry in budget.categoryAmounts.entries) {
+        final categoryId = entry.key;
+        final budgetAmount = entry.value;
+
+        // Find category spending
+        final categorySpent = budget.budgetType == BudgetType.personal
+            ? _getPersonalCategorySpending(reportData, categoryId)
+            : _getSharedCategorySpending(reportData, categoryId, userProvider);
+
+        totalSpent += categorySpent;
+
+        final percentage = budgetAmount > 0
+            ? (categorySpent / budgetAmount * 100)
+            : 0;
+        final isOverBudget = categorySpent > budgetAmount;
+        final isNearLimit = percentage >= 80;
+
+        // Get category name
+        final category = await _getCategoryById(categoryId);
+        final categoryName = category?.name ?? 'Unknown Category';
+
+        categoryAnalytics[categoryId] = CategoryBudgetAnalytics(
+          categoryId: categoryId,
+          categoryName: categoryName,
+          budgetAmount: budgetAmount,
+          spentAmount: categorySpent,
+          remainingAmount: budgetAmount - categorySpent,
+          spentPercentage: percentage.toDouble(),
+          isOverBudget: isOverBudget,
+          isNearLimit: isNearLimit,
+          dailySpending: [], // TODO: Implement daily spending calculation
+        );
+
+        // Generate alerts
+        if (isOverBudget) {
+          alerts.add(
+            BudgetAlert(
+              type: BudgetAlertType.overBudget,
+              categoryId: categoryId,
+              categoryName: categoryName,
+              message:
+                  'Đã vượt ngân sách ${NumberFormat.currency(locale: 'vi_VN', symbol: '₫').format(budgetAmount - categorySpent)}',
+              amount: categorySpent - budgetAmount,
+              timestamp: DateTime.now(),
+            ),
+          );
+        } else if (isNearLimit) {
+          alerts.add(
+            BudgetAlert(
+              type: BudgetAlertType.nearLimit,
+              categoryId: categoryId,
+              categoryName: categoryName,
+              message:
+                  'Sắp đạt giới hạn ngân sách (${percentage.toStringAsFixed(1)}%)',
+              amount: categorySpent,
+              timestamp: DateTime.now(),
+            ),
+          );
+        }
+      }
+
+      final totalPercentage = budget.totalAmount > 0
+          ? (totalSpent / budget.totalAmount * 100)
+          : 0;
+
+      return BudgetAnalytics(
+        budgetId: budgetId,
+        totalBudget: budget.totalAmount,
+        totalSpent: totalSpent,
+        totalRemaining: budget.totalAmount - totalSpent,
+        spentPercentage: totalPercentage.toDouble(),
+        categoryAnalytics: categoryAnalytics,
+        alerts: alerts,
+        trend: _calculateBudgetTrend([]), // TODO: Implement trend calculation
+      );
+    } catch (e) {
+      print('❌ Error getting budget analytics: $e');
+      rethrow;
+    }
+  }
+
+  double _getPersonalCategorySpending(
+    ReportData reportData,
+    String categoryId,
+  ) {
+    for (final entry in reportData.expenseByCategory.entries) {
+      if (entry.key.id == categoryId) {
+        return entry.value;
+      }
+    }
+    return 0.0;
+  }
+
+  double _getSharedCategorySpending(
+    ReportData reportData,
+    String categoryId,
+    UserProvider userProvider,
+  ) {
+    // TODO: Implement shared category spending calculation
+    // This should calculate spending from shared wallets for the category
+    return _getPersonalCategorySpending(reportData, categoryId);
+  }
+
+  Future<Category?> _getCategoryById(String categoryId) async {
+    try {
+      final snapshot = await _dbRef.child('categories').child(categoryId).get();
+      if (snapshot.exists) {
+        return Category.fromSnapshot(snapshot);
+      }
+      return null;
+    } catch (e) {
+      print('Error getting category: $e');
+      return null;
+    }
+  }
+
+  BudgetTrend _calculateBudgetTrend(List<double> monthlySpending) {
+    // TODO: Implement proper trend calculation
+    return BudgetTrend(
+      direction: BudgetTrendDirection.stable,
+      changePercentage: 0,
+      description: 'Xu hướng ổn định',
+      monthlySpending: monthlySpending,
+    );
+  }
+
+  // ============ NOTIFICATION METHODS ============
+
+  Future<void> _sendCategoryNotification(
+    String userId,
+    String title,
+    String body,
+  ) async {
+    try {
+      await _dbRef.child('user_notifications').child(userId).push().set({
+        'title': title,
+        'body': body,
+        'timestamp': ServerValue.timestamp,
+        'type': 'category',
+        'isRead': false,
+      });
+    } catch (e) {
+      print('Error sending category notification: $e');
+    }
+  }
+
+  Future<void> _sendBudgetNotification(
+    String userId,
+    String title,
+    String body,
+  ) async {
+    try {
+      await _dbRef.child('user_notifications').child(userId).push().set({
+        'title': title,
+        'body': body,
+        'timestamp': ServerValue.timestamp,
+        'type': 'budget',
+        'isRead': false,
+      });
+    } catch (e) {
+      print('Error sending budget notification: $e');
+    }
+  }
+
+  // ============ OFFLINE FIRST METHODS ============
+
+  /// Get categories offline-first
+  Future<List<Category>> getCategoriesOfflineFirst({
+    String? type,
+    CategoryOwnershipType? ownershipType,
+    UserProvider? userProvider,
+  }) async {
+    try {
+      // Try local database first
+      final localCategories = await _localDb.getLocalCategories(
+        ownerId: _uid,
+        type: type,
+      );
+
+      if (localCategories.isNotEmpty) {
+        print(
+          '📱 Returning ${localCategories.length} categories from local DB',
+        );
+        return _filterCategoriesByOwnership(localCategories, userProvider);
+      }
+
+      // Fallback to Firebase
+      print('☁️ Fetching categories from Firebase...');
+      return [];
+    } catch (e) {
+      print('❌ Error getting categories offline-first: $e');
+      return [];
+    }
+  }
+
+  List<Category> _filterCategoriesByOwnership(
+    List<Category> categories,
+    UserProvider? userProvider,
+  ) {
+    if (userProvider == null) return categories;
+
+    return categories.where((category) {
+      return category.ownerId == _uid ||
+          (userProvider.partnershipId != null &&
+              category.ownerId == userProvider.partnershipId);
+    }).toList();
+  }
+
+  /// Sync categories when online
+  Future<void> syncCategoriesToFirebase() async {
+    if (_uid == null) return;
+
+    try {
+      final unsyncedCategories = await _localDb.getUnsyncedRecords(
+        'categories',
+      );
+      print('🔄 Syncing ${unsyncedCategories.length} unsynced categories...');
+
+      for (final record in unsyncedCategories) {
+        try {
+          final category = Category(
+            id: record['id'],
+            name: record['name'],
+            ownerId: record['ownerId'],
+            type: record['type'],
+            ownershipType: CategoryOwnershipType.values.firstWhere(
+              (e) => e.name == record['ownershipType'],
+              orElse: () => CategoryOwnershipType.personal,
+            ),
+            iconCodePoint: record['iconCodePoint'],
+            subCategories: Map<String, String>.from(
+              json.decode(record['subCategories'] ?? '{}'),
+            ),
+            createdBy: record['createdBy'],
+            isArchived: record['isArchived'] == 1,
+          );
+
+          await _dbRef
+              .child('categories')
+              .child(category.id)
+              .set(category.toJson());
+
+          await _localDb.markAsSynced('categories', category.id);
+          print('✅ Synced category: ${category.name}');
+        } catch (e) {
+          print('❌ Failed to sync category ${record['id']}: $e');
+        }
+      }
+
+      print('🎉 Categories sync completed successfully');
+    } catch (e) {
+      print('❌ Error syncing categories: $e');
+    }
+  }
+
+  /// Sync budgets when online
+  Future<void> syncBudgetsToFirebase() async {
+    if (_uid == null) return;
+
+    try {
+      final unsyncedBudgets = await _localDb.getUnsyncedRecords('budgets');
+      print('🔄 Syncing ${unsyncedBudgets.length} unsynced budgets...');
+
+      for (final record in unsyncedBudgets) {
+        try {
+          final budget = Budget(
+            id: record['id'],
+            ownerId: record['ownerId'],
+            month: record['month'],
+            totalAmount: record['totalAmount'],
+            categoryAmounts: Map<String, double>.from(
+              json.decode(record['categoryAmounts'] ?? '{}'),
+            ),
+            budgetType: BudgetType.values.firstWhere(
+              (e) => e.name == record['budgetType'],
+              orElse: () => BudgetType.personal,
+            ),
+            createdBy: record['createdBy'],
+            isActive: record['isActive'] == 1,
+          );
+
+          await _dbRef.child('budgets').child(budget.id).set(budget.toJson());
+
+          await _localDb.markAsSynced('budgets', budget.id);
+          print('✅ Synced budget: ${budget.displayName}');
+        } catch (e) {
+          print('❌ Failed to sync budget ${record['id']}: $e');
+        }
+      }
+
+      print('🎉 Budgets sync completed successfully');
+    } catch (e) {
+      print('❌ Error syncing budgets: $e');
+    }
+  }
+
+  /// Complete offline sync for categories and budgets
+  Future<void> syncCategoriesAndBudgets() async {
+    await Future.wait([syncCategoriesToFirebase(), syncBudgetsToFirebase()]);
   }
 }
