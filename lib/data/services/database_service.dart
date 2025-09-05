@@ -1308,4 +1308,342 @@ class DatabaseService {
     // Could add error tracking service here
     // ErrorTrackingService.logError(error, context);
   }
+
+  Future<void> updateWallet(Wallet wallet) async {
+    if (_uid == null) return;
+
+    try {
+      await _dbRef.child('wallets').child(wallet.id).update({
+        'name': wallet.name,
+        'balance': wallet.balance,
+        'isVisibleToPartner': wallet.isVisibleToPartner,
+        'updatedAt': ServerValue.timestamp,
+      });
+
+      // Update local database
+      await _localDb.saveWalletLocally(wallet, syncStatus: 1);
+
+      print('✅ Wallet updated successfully: ${wallet.name}');
+    } catch (e) {
+      print('❌ Error updating wallet: $e');
+      rethrow;
+    }
+  }
+
+  /// Delete wallet with safety checks
+  Future<void> deleteWallet(String walletId) async {
+    if (_uid == null) return;
+
+    try {
+      // 1. Check if wallet has transactions
+      final hasTransactions = await _checkWalletHasTransactions(walletId);
+
+      if (hasTransactions) {
+        throw Exception(
+          'Không thể xóa ví này vì đang có giao dịch. Hãy xóa hết giao dịch trước hoặc chuyển sang ví khác.',
+        );
+      }
+
+      // 2. Check if this is the last wallet
+      final walletCount = await _getWalletCount();
+      if (walletCount <= 1) {
+        throw Exception('Không thể xóa ví cuối cùng. Bạn cần có ít nhất 1 ví.');
+      }
+
+      // 3. Delete from Firebase
+      await _dbRef.child('wallets').child(walletId).remove();
+
+      // 4. Delete from local database
+      await _localDb.deleteWalletLocally(walletId);
+
+      print('✅ Wallet deleted successfully');
+    } catch (e) {
+      print('❌ Error deleting wallet: $e');
+      rethrow;
+    }
+  }
+
+  /// Check if wallet has any transactions
+  Future<bool> _checkWalletHasTransactions(String walletId) async {
+    try {
+      final snapshot = await _dbRef
+          .child('transactions')
+          .orderByChild('walletId')
+          .equalTo(walletId)
+          .limitToFirst(1)
+          .get();
+
+      return snapshot.exists && snapshot.children.isNotEmpty;
+    } catch (e) {
+      print('Error checking wallet transactions: $e');
+      return true; // Be safe and assume it has transactions
+    }
+  }
+
+  /// Get total wallet count for current user
+  Future<int> _getWalletCount() async {
+    try {
+      final snapshot = await _dbRef
+          .child('wallets')
+          .orderByChild('ownerId')
+          .equalTo(_uid)
+          .get();
+
+      if (!snapshot.exists) return 0;
+
+      final walletsMap = snapshot.value as Map<dynamic, dynamic>;
+      return walletsMap.length;
+    } catch (e) {
+      print('Error getting wallet count: $e');
+      return 0;
+    }
+  }
+
+  /// Archive wallet instead of deleting (if has transactions)
+  Future<void> archiveWallet(String walletId) async {
+    if (_uid == null) return;
+
+    try {
+      await _dbRef.child('wallets').child(walletId).update({
+        'isArchived': true,
+        'archivedAt': ServerValue.timestamp,
+      });
+
+      print('✅ Wallet archived successfully');
+    } catch (e) {
+      print('❌ Error archiving wallet: $e');
+      rethrow;
+    }
+  }
+
+  /// Restore archived wallet
+  Future<void> restoreWallet(String walletId) async {
+    if (_uid == null) return;
+
+    try {
+      await _dbRef.child('wallets').child(walletId).update({
+        'isArchived': false,
+        'restoredAt': ServerValue.timestamp,
+      });
+
+      print('✅ Wallet restored successfully');
+    } catch (e) {
+      print('❌ Error restoring wallet: $e');
+      rethrow;
+    }
+  }
+
+  /// Adjust wallet balance (manual correction)
+  Future<void> adjustWalletBalance(
+    String walletId,
+    double newBalance,
+    String reason,
+  ) async {
+    if (_uid == null) return;
+
+    try {
+      // Get current wallet
+      final walletSnapshot = await _dbRef
+          .child('wallets')
+          .child(walletId)
+          .get();
+      if (!walletSnapshot.exists) {
+        throw Exception('Ví không tồn tại');
+      }
+
+      final walletData = walletSnapshot.value as Map<dynamic, dynamic>;
+      final currentBalance = (walletData['balance'] ?? 0).toDouble();
+      final difference = newBalance - currentBalance;
+
+      // Update wallet balance
+      await _dbRef.child('wallets').child(walletId).update({
+        'balance': newBalance,
+        'lastAdjustment': {
+          'previousBalance': currentBalance,
+          'newBalance': newBalance,
+          'difference': difference,
+          'reason': reason,
+          'adjustedAt': ServerValue.timestamp,
+          'adjustedBy': _uid,
+        },
+      });
+
+      // Create adjustment transaction record for history
+      if (difference != 0) {
+        await _createAdjustmentTransaction(
+          walletId,
+          difference,
+          reason,
+          walletData['name'] ?? 'Unknown Wallet',
+        );
+      }
+
+      print('✅ Wallet balance adjusted successfully');
+    } catch (e) {
+      print('❌ Error adjusting wallet balance: $e');
+      rethrow;
+    }
+  }
+
+  /// Create a special transaction record for balance adjustment
+  Future<void> _createAdjustmentTransaction(
+    String walletId,
+    double difference,
+    String reason,
+    String walletName,
+  ) async {
+    try {
+      final adjustmentTransaction = TransactionModel(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        amount: difference.abs(),
+        type: difference > 0 ? TransactionType.income : TransactionType.expense,
+        categoryId: 'adjustment', // Special category for adjustments
+        walletId: walletId,
+        date: DateTime.now(),
+        description: 'Điều chỉnh số dư: $reason',
+        userId: _uid!,
+      );
+
+      // Save to Firebase
+      await _dbRef
+          .child('transactions')
+          .child(adjustmentTransaction.id)
+          .set(adjustmentTransaction.toJson());
+
+      // Save locally
+      await _localDb.saveTransactionLocally(
+        adjustmentTransaction,
+        syncStatus: 1,
+      );
+    } catch (e) {
+      print('Error creating adjustment transaction: $e');
+      // Don't rethrow - adjustment record is not critical
+    }
+  }
+
+  /// Transfer money between wallets (enhanced version)
+  Future<void> transferBetweenWallets({
+    required String fromWalletId,
+    required String toWalletId,
+    required double amount,
+    required String description,
+    String? notes,
+  }) async {
+    if (_uid == null) return;
+
+    try {
+      // Validate wallets exist and have sufficient balance
+      await _validateTransfer(fromWalletId, toWalletId, amount);
+
+      // Create transfer transaction
+      final transferId = DateTime.now().millisecondsSinceEpoch.toString();
+
+      // Create FROM transaction (outgoing)
+      final fromTransaction = TransactionModel(
+        id: '${transferId}_from',
+        amount: amount,
+        type: TransactionType.transfer,
+        walletId: fromWalletId,
+        date: DateTime.now(),
+        description: description,
+        userId: _uid!,
+        transferToWalletId: toWalletId,
+      );
+
+      // Create TO transaction (incoming)
+      final toTransaction = TransactionModel(
+        id: '${transferId}_to',
+        amount: amount,
+        type: TransactionType.income,
+        categoryId: 'transfer_in', // Special category
+        walletId: toWalletId,
+        date: DateTime.now(),
+        description: 'Nhận chuyển khoản: $description',
+        userId: _uid!,
+      );
+
+      // Execute transfer in transaction
+      await _executeTransfer(fromTransaction, toTransaction, amount);
+
+      print('✅ Transfer completed successfully');
+    } catch (e) {
+      print('❌ Error transferring money: $e');
+      rethrow;
+    }
+  }
+
+  /// Validate transfer before execution
+  Future<void> _validateTransfer(
+    String fromWalletId,
+    String toWalletId,
+    double amount,
+  ) async {
+    if (fromWalletId == toWalletId) {
+      throw Exception('Không thể chuyển tiền cùng một ví');
+    }
+
+    if (amount <= 0) {
+      throw Exception('Số tiền chuyển phải lớn hơn 0');
+    }
+
+    // Check FROM wallet balance
+    final fromWalletSnapshot = await _dbRef
+        .child('wallets')
+        .child(fromWalletId)
+        .get();
+    if (!fromWalletSnapshot.exists) {
+      throw Exception('Ví nguồn không tồn tại');
+    }
+
+    final fromBalance = (fromWalletSnapshot.value as Map)['balance'] ?? 0;
+    if (fromBalance < amount) {
+      throw Exception('Số dư ví nguồn không đủ');
+    }
+
+    // Check TO wallet exists
+    final toWalletSnapshot = await _dbRef
+        .child('wallets')
+        .child(toWalletId)
+        .get();
+    if (!toWalletSnapshot.exists) {
+      throw Exception('Ví đích không tồn tại');
+    }
+  }
+
+  /// Execute transfer with atomic operations
+  Future<void> _executeTransfer(
+    TransactionModel fromTransaction,
+    TransactionModel toTransaction,
+    double amount,
+  ) async {
+    // Use Firebase transaction for atomicity
+    await _dbRef.runTransaction(
+      (mutableData) async {
+            // Update FROM wallet balance
+            final fromWalletRef = mutableData
+                .child('wallets')
+                .child(fromTransaction.walletId);
+            final fromBalance =
+                (fromWalletRef.child('balance').value as num?)?.toDouble() ?? 0;
+            fromWalletRef.child('balance').value = fromBalance - amount;
+
+            // Update TO wallet balance
+            final toWalletRef = mutableData
+                .child('wallets')
+                .child(toTransaction.walletId);
+            final toBalance =
+                (toWalletRef.child('balance').value as num?)?.toDouble() ?? 0;
+            toWalletRef.child('balance').value = toBalance + amount;
+
+            // Add transaction records
+            mutableData.child('transactions').child(fromTransaction.id).value =
+                fromTransaction.toJson();
+            mutableData.child('transactions').child(toTransaction.id).value =
+                toTransaction.toJson();
+
+            return mutableData;
+          }
+          as TransactionHandler,
+    );
+  }
 }

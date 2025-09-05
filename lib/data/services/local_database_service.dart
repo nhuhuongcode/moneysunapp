@@ -773,4 +773,232 @@ class LocalDatabaseService {
     await db.close();
     _database = null;
   }
+
+  Future<void> deleteWalletLocally(String walletId) async {
+    final db = await database;
+
+    try {
+      await db.delete('wallets', where: 'id = ?', whereArgs: [walletId]);
+
+      print('✅ Wallet deleted from local database: $walletId');
+    } catch (e) {
+      print('❌ Error deleting wallet locally: $e');
+      rethrow;
+    }
+  }
+
+  /// Update wallet in local database
+  Future<void> updateWalletLocally(Wallet wallet, {int syncStatus = 1}) async {
+    final db = await database;
+
+    try {
+      await db.update(
+        'wallets',
+        {
+          'name': wallet.name,
+          'balance': wallet.balance,
+          'ownerId': wallet.ownerId,
+          'isVisibleToPartner': wallet.isVisibleToPartner ? 1 : 0,
+          'syncStatus': syncStatus,
+          'updatedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [wallet.id],
+      );
+
+      print('✅ Wallet updated in local database: ${wallet.name}');
+    } catch (e) {
+      print('❌ Error updating wallet locally: $e');
+      rethrow;
+    }
+  }
+
+  Future<Wallet?> getWalletById(String walletId) async {
+    final db = await database;
+
+    try {
+      final result = await db.query(
+        'wallets',
+        where: 'id = ?',
+        whereArgs: [walletId],
+        limit: 1,
+      );
+
+      if (result.isEmpty) return null;
+
+      return _walletFromMap(result.first);
+    } catch (e) {
+      print('❌ Error getting wallet by ID: $e');
+      return null;
+    }
+  }
+
+  /// Check if wallet has transactions locally
+  Future<bool> checkWalletHasTransactionsLocally(String walletId) async {
+    final db = await database;
+
+    try {
+      final result = await db.query(
+        'transactions',
+        where: 'walletId = ?',
+        whereArgs: [walletId],
+        limit: 1,
+      );
+
+      return result.isNotEmpty;
+    } catch (e) {
+      print('❌ Error checking wallet transactions locally: $e');
+      return true; // Be safe
+    }
+  }
+
+  /// Get wallet count for user
+  Future<int> getWalletCountForUser(String ownerId) async {
+    final db = await database;
+
+    try {
+      final result = await db.query(
+        'wallets',
+        columns: ['COUNT(*) as count'],
+        where: 'ownerId = ?',
+        whereArgs: [ownerId],
+      );
+
+      if (result.isEmpty) return 0;
+
+      return result.first['count'] as int;
+    } catch (e) {
+      print('❌ Error getting wallet count: $e');
+      return 0;
+    }
+  }
+
+  /// Archive wallet locally
+  Future<void> archiveWalletLocally(String walletId) async {
+    final db = await database;
+
+    try {
+      await db.update(
+        'wallets',
+        {
+          'isArchived': 1,
+          'archivedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          'updatedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [walletId],
+      );
+
+      print('✅ Wallet archived locally: $walletId');
+    } catch (e) {
+      print('❌ Error archiving wallet locally: $e');
+      rethrow;
+    }
+  }
+
+  /// Get wallets with archive status
+  Future<List<Wallet>> getLocalWalletsWithArchive(
+    String ownerId, {
+    bool includeArchived = false,
+  }) async {
+    final db = await database;
+
+    try {
+      String whereClause = 'ownerId = ?';
+      List<dynamic> whereArgs = [ownerId];
+
+      if (!includeArchived) {
+        whereClause += ' AND (isArchived IS NULL OR isArchived = 0)';
+      }
+
+      final result = await db.query(
+        'wallets',
+        where: whereClause,
+        whereArgs: whereArgs,
+        orderBy: 'name ASC',
+      );
+
+      return result.map((map) => _walletFromMap(map)).toList();
+    } catch (e) {
+      print('❌ Error getting wallets with archive status: $e');
+      return [];
+    }
+  }
+
+  /// Enhanced wallet from map with archive support
+  Wallet _walletFromMapEnhanced(Map<String, dynamic> map) {
+    return Wallet(
+      id: map['id'],
+      name: map['name'],
+      balance: map['balance'],
+      ownerId: map['ownerId'],
+      isVisibleToPartner: map['isVisibleToPartner'] == 1,
+    );
+  }
+
+  /// Backup wallet data before operations
+  Future<Map<String, dynamic>> backupWalletData(String walletId) async {
+    final db = await database;
+
+    try {
+      // Backup wallet info
+      final walletResult = await db.query(
+        'wallets',
+        where: 'id = ?',
+        whereArgs: [walletId],
+      );
+
+      // Backup related transactions
+      final transactionsResult = await db.query(
+        'transactions',
+        where: 'walletId = ?',
+        whereArgs: [walletId],
+      );
+
+      return {
+        'wallet': walletResult.isNotEmpty ? walletResult.first : null,
+        'transactions': transactionsResult,
+        'backupTime': DateTime.now().toIso8601String(),
+      };
+    } catch (e) {
+      print('❌ Error backing up wallet data: $e');
+      return {};
+    }
+  }
+
+  /// Restore wallet data from backup
+  Future<void> restoreWalletData(Map<String, dynamic> backupData) async {
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        // Restore wallet
+        if (backupData['wallet'] != null) {
+          await txn.insert(
+            'wallets',
+            backupData['wallet'],
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+
+        // Restore transactions
+        final transactions =
+            backupData['transactions'] as List<Map<String, dynamic>>?;
+        if (transactions != null) {
+          for (final transaction in transactions) {
+            await txn.insert(
+              'transactions',
+              transaction,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          }
+        }
+      });
+
+      print('✅ Wallet data restored successfully');
+    } catch (e) {
+      print('❌ Error restoring wallet data: $e');
+      rethrow;
+    }
+  }
 }
