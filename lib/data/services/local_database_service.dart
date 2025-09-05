@@ -1,7 +1,3 @@
-<<<<<<< Updated upstream
-// lib/data/services/local_database_service.dart
-=======
->>>>>>> Stashed changes
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
@@ -12,13 +8,8 @@ import 'dart:convert';
 class LocalDatabaseService {
   static Database? _database;
   static const String _databaseName = 'moneysun_local.db';
-<<<<<<< Updated upstream
-  static const int _databaseVersion = 1;
-=======
   static const int _databaseVersion = 2;
->>>>>>> Stashed changes
 
-  // Singleton pattern
   static final LocalDatabaseService _instance =
       LocalDatabaseService._internal();
   factory LocalDatabaseService() => _instance;
@@ -30,162 +21,90 @@ class LocalDatabaseService {
   }
 
   Future<Database> _initDatabase() async {
-    String path = join(await getDatabasesPath(), _databaseName);
+    try {
+      String path = join(await getDatabasesPath(), _databaseName);
+      print('📁 Database path: $path');
 
-    return await openDatabase(
-      path,
-      version: _databaseVersion,
-      onCreate: _createTables,
-      onUpgrade: _upgradeDatabase,
-    );
-  }
-
-  Future<void> _createTables(Database db, int version) async {
-    // Bảng transactions
-    await db.execute('''
-      CREATE TABLE transactions (
-      id TEXT PRIMARY KEY,
-      firebase_id TEXT UNIQUE, -- Firebase document ID
-      amount REAL NOT NULL,
-      type TEXT NOT NULL,
-      category_id TEXT,
-      wallet_id TEXT NOT NULL,
-      date TEXT NOT NULL,
-      description TEXT,
-      user_id TEXT NOT NULL,
-      sub_category_id TEXT,
-      transfer_to_wallet_id TEXT,
-      
-      sync_status INTEGER DEFAULT 0, -- 0: pending, 1: synced, 2: conflict, 3: error
-      last_modified INTEGER DEFAULT (strftime('%s', 'now')),
-      version INTEGER DEFAULT 1,
-      checksum TEXT, -- For conflict detection
-      
-      conflict_data TEXT, 
-      resolved_at INTEGER,
-      
-      created_at INTEGER DEFAULT (strftime('%s', 'now')),
-      updated_at INTEGER DEFAULT (strftime('%s', 'now')),
-      deleted_at INTEGER, 
-      
-      FOREIGN KEY (wallet_id) REFERENCES wallets(id),
-      FOREIGN KEY (category_id) REFERENCES categories(id)
-    )
-    ''');
-
-    // Bảng wallets
-    await db.execute('''
-      CREATE TABLE wallets (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        balance REAL NOT NULL,
-        ownerId TEXT NOT NULL,
-        isVisibleToPartner INTEGER DEFAULT 1,
-        syncStatus INTEGER DEFAULT 0,
-        createdAt INTEGER DEFAULT (strftime('%s', 'now')),
-        updatedAt INTEGER DEFAULT (strftime('%s', 'now'))
-      )
-    ''');
-
-    // Bảng categories
-    await db.execute('''
-      CREATE TABLE categories (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        ownerId TEXT NOT NULL,
-        type TEXT NOT NULL,
-        iconCodePoint INTEGER,
-        subCategories TEXT,
-        syncStatus INTEGER DEFAULT 0,
-        createdAt INTEGER DEFAULT (strftime('%s', 'now')),
-        updatedAt INTEGER DEFAULT (strftime('%s', 'now'))
-      )
-    ''');
-
-    // Bảng description_history - V7 requirement
-    await db.execute('''
-      CREATE TABLE description_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        userId TEXT NOT NULL,
-        description TEXT NOT NULL,
-        usageCount INTEGER DEFAULT 1,
-        lastUsed INTEGER DEFAULT (strftime('%s', 'now')),
-        createdAt INTEGER DEFAULT (strftime('%s', 'now'))
-      )
-    ''');
-
-<<<<<<< Updated upstream
-    // Bảng sync_queue để quản lý offline sync
-    await db.execute('''
-      CREATE TABLE sync_queue (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      table_name TEXT NOT NULL,
-      record_id TEXT NOT NULL,
-      firebase_id TEXT,
-      operation TEXT NOT NULL,
-      data TEXT NOT NULL,
-      priority INTEGER DEFAULT 1,
-      retry_count INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 3,
-      last_error TEXT,
-      scheduled_at INTEGER DEFAULT (strftime('%s', 'now')),
-      created_at INTEGER DEFAULT (strftime('%s', 'now')),
-      
-      UNIQUE(table_name, record_id, operation)
-    )
-    ''');
-
-    await db.execute('''
-      CREATE TABLE sync_metadata (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-      )
-    ''');
-
-    await db.execute('''
-      CREATE TABLE change_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      table_name TEXT NOT NULL,
-      record_id TEXT NOT NULL,
-      operation TEXT NOT NULL, -- INSERT, UPDATE, DELETE
-      changes TEXT, -- JSON of changed fields
-      user_id TEXT NOT NULL,
-      created_at INTEGER DEFAULT (strftime('%s', 'now'))
-    )
-    ''');
-
-    // Index cho performance
-    await db.execute(
-      'CREATE INDEX idx_transactions_sync_status ON transactions(sync_status, last_modified)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_transactions_user_date ON transactions(user_id, date)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_transactions_firebase_id ON transactions(firebase_id)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_transactions_checksum ON transactions(checksum)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_change_log_user_time ON change_log(user_id, created_at);',
-    );
-  }
-
-  Future<void> _upgradeDatabase(
-    Database db,
-    int oldVersion,
-    int newVersion,
-  ) async {
-    // Handle database upgrades if needed in future versions
-    if (oldVersion < 2) {
-      // Example upgrade logic for future versions
+      return await openDatabase(
+        path,
+        version: _databaseVersion,
+        onCreate: _createTables,
+        onUpgrade: _upgradeDatabase,
+        onOpen: (db) async {
+          print('✅ Database opened successfully');
+        },
+      );
+    } catch (e) {
+      print('❌ Error initializing database: $e');
+      rethrow;
     }
   }
 
-  // ============ TRANSACTIONS ============
-=======
+  Future<void> _createTables(Database db, int version) async {
+    print('🔨 Creating database tables...');
+
+    try {
+      // Transactions table
+      await db.execute('''
+        CREATE TABLE transactions (
+          id TEXT PRIMARY KEY,
+          firebase_id TEXT UNIQUE,
+          amount REAL NOT NULL,
+          type TEXT NOT NULL,
+          category_id TEXT,
+          wallet_id TEXT NOT NULL,
+          date TEXT NOT NULL,
+          description TEXT,
+          user_id TEXT NOT NULL,
+          sub_category_id TEXT,
+          transfer_to_wallet_id TEXT,
+          
+          sync_status INTEGER DEFAULT 0,
+          last_modified INTEGER DEFAULT (strftime('%s', 'now')),
+          version INTEGER DEFAULT 1,
+          checksum TEXT,
+          
+          conflict_data TEXT, 
+          resolved_at INTEGER,
+          
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+          deleted_at INTEGER, 
+          
+          FOREIGN KEY (wallet_id) REFERENCES wallets(id),
+          FOREIGN KEY (category_id) REFERENCES categories(id)
+        )
+      ''');
+
+      // Wallets table
+      await db.execute('''
+        CREATE TABLE wallets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          balance REAL NOT NULL,
+          ownerId TEXT NOT NULL,
+          isVisibleToPartner INTEGER DEFAULT 1,
+          syncStatus INTEGER DEFAULT 0,
+          createdAt INTEGER DEFAULT (strftime('%s', 'now')),
+          updatedAt INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      ''');
+
+      // Categories table
+      await db.execute('''
+        CREATE TABLE categories (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          ownerId TEXT NOT NULL,
+          type TEXT NOT NULL,
+          iconCodePoint INTEGER,
+          subCategories TEXT,
+          syncStatus INTEGER DEFAULT 0,
+          createdAt INTEGER DEFAULT (strftime('%s', 'now')),
+          updatedAt INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      ''');
+
       // FIXED: Enhanced description_history table with proper defaults
       await db.execute('''
         CREATE TABLE description_history (
@@ -437,9 +356,6 @@ class LocalDatabaseService {
     }
   }
 
-  // ============ ENHANCED TRANSACTIONS METHODS ============
-
->>>>>>> Stashed changes
   Future<void> saveTransactionLocally(
     TransactionModel transaction, {
     int syncStatus = 0,

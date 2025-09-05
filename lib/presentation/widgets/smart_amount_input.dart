@@ -173,7 +173,7 @@ class _SmartAmountInputState extends State<SmartAmountInput> {
       suggestions = [
         _roundToNearestMagnitude(base, magnitude),
         _roundToNearestMagnitude(base, magnitude * 10),
-        base + magnitude,
+        (magnitude + base).toDouble(),
         base + magnitude * 5,
         base * 2,
       ];
