@@ -1002,6 +1002,8 @@ class LocalDatabaseService {
       rethrow;
     }
   }
+
+  Future checkCategoryHasTransactionsLocally(String categoryId) async {}
 }
 
 extension LocalDatabaseServiceEnhanced on LocalDatabaseService {
