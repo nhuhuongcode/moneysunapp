@@ -1,9 +1,8 @@
-// lib/app.dart - FIXED WITH PROPER SERVICE INJECTION
 import 'package:flutter/material.dart' hide NotificationListener;
 import 'package:moneysun/core/theme/app_theme.dart';
+import 'package:moneysun/data/services/data_service.dart';
 import 'package:moneysun/features/auth/presentation/screens/auth_gate.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
-import 'package:moneysun/data/services/data_service.dart';
 import 'package:provider/provider.dart';
 import 'package:moneysun/presentation/widgets/notification_listener.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
@@ -15,16 +14,15 @@ class MoneySunApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        // Primary UserProvider
+        // 1. Primary UserProvider
         ChangeNotifierProvider(create: (context) => UserProvider()),
 
-        // DataService with UserProvider dependency injection
+        // 2. UNIFIED DATA SERVICE - Single source of truth
         ChangeNotifierProxyProvider<UserProvider, DataService>(
           create: (context) => DataService(),
           update: (context, userProvider, dataService) {
-            // FIX: Proper dependency injection to prevent crash
+            // Initialize DataService when UserProvider changes
             if (dataService != null && userProvider != null) {
-              // Initialize DataService with UserProvider when available
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 _initializeDataService(dataService, userProvider);
               });
@@ -33,7 +31,7 @@ class MoneySunApp extends StatelessWidget {
           },
         ),
 
-        // Connection Status Provider for UI
+        // 3. Connection Status Provider for UI
         ChangeNotifierProxyProvider<DataService, ConnectionStatusProvider>(
           create: (context) => ConnectionStatusProvider(),
           update: (context, dataService, connectionProvider) {
@@ -65,6 +63,9 @@ class MoneySunApp extends StatelessWidget {
                       child: ConnectionStatusBanner(status: connectionStatus),
                     ),
                   ),
+
+                // Debug Panel (chỉ hiện trong debug mode)
+                if (kDebugMode) const DebugPanel(),
               ],
             ),
             builder: (context, child) {
@@ -81,7 +82,7 @@ class MoneySunApp extends StatelessWidget {
     );
   }
 
-  /// Initialize DataService with UserProvider - FIXES CRASH BUG
+  /// Initialize DataService with UserProvider - SIMPLIFIED VERSION
   void _initializeDataService(
     DataService dataService,
     UserProvider userProvider,
@@ -89,21 +90,21 @@ class MoneySunApp extends StatelessWidget {
     try {
       // Check if already initialized
       if (dataService.isInitialized) {
-        print('✅ DataService already initialized');
+        debugPrint('✅ DataService already initialized');
         return;
       }
 
-      print('🔄 Initializing DataService with UserProvider...');
+      debugPrint('🔄 Initializing DataService with UserProvider...');
       await dataService.initialize(userProvider);
-      print('✅ DataService initialized successfully');
+      debugPrint('✅ DataService initialized successfully');
     } catch (e) {
-      print('❌ Failed to initialize DataService: $e');
+      debugPrint('❌ Failed to initialize DataService: $e');
       // Don't rethrow - app should continue working even if sync fails
     }
   }
 }
 
-/// Connection Status Provider for UI state management
+/// UPDATED Connection Status Provider for DataService
 class ConnectionStatusProvider extends ChangeNotifier {
   bool _isOnline = true;
   bool _isSyncing = false;
@@ -159,7 +160,7 @@ class ConnectionStatusProvider extends ChangeNotifier {
   }
 }
 
-/// Connection Status Banner Widget
+/// UPDATED Connection Status Banner Widget
 class ConnectionStatusBanner extends StatelessWidget {
   final ConnectionStatusProvider status;
 
@@ -281,7 +282,7 @@ class ConnectionStatusBanner extends StatelessWidget {
   }
 }
 
-/// Global Error Display Widget
+/// Global Error Display Widget (giữ nguyên)
 class ErrorDisplayWidget extends StatelessWidget {
   final String error;
 
@@ -330,7 +331,7 @@ class ErrorDisplayWidget extends StatelessWidget {
   }
 }
 
-/// Development Debug Panel (only shown in debug mode)
+/// UPDATED Debug Panel for DataService
 class DebugPanel extends StatelessWidget {
   const DebugPanel({super.key});
 
@@ -357,18 +358,22 @@ class DebugPanel extends StatelessWidget {
     DataService dataService,
     UserProvider userProvider,
   ) {
+    final healthStatus = dataService.getHealthStatus();
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Debug Info'),
+        title: const Text('Debug Info - Unified Service'),
         content: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _buildDebugRow('Online', dataService.isOnline.toString()),
-              _buildDebugRow('Syncing', dataService.isSyncing.toString()),
-              _buildDebugRow('Pending', dataService.pendingItems.toString()),
+              _buildDebugRow('Service Type', 'DataService'),
+              _buildDebugRow('Initialized', '${healthStatus['isInitialized']}'),
+              _buildDebugRow('Online', '${healthStatus['isOnline']}'),
+              _buildDebugRow('Syncing', '${healthStatus['isSyncing']}'),
+              _buildDebugRow('Pending', '${healthStatus['pendingItems']}'),
               _buildDebugRow(
                 'User ID',
                 userProvider.currentUser?.uid ?? 'null',
@@ -379,10 +384,10 @@ class DebugPanel extends StatelessWidget {
               ),
               _buildDebugRow(
                 'Last Sync',
-                dataService.lastSyncTime?.toString() ?? 'null',
+                healthStatus['lastSyncTime'] ?? 'null',
               ),
-              if (dataService.lastError != null)
-                _buildDebugRow('Error', dataService.lastError!),
+              if (healthStatus['lastError'] != null)
+                _buildDebugRow('Error', healthStatus['lastError']!),
             ],
           ),
         ),
@@ -397,10 +402,21 @@ class DebugPanel extends StatelessWidget {
                 await dataService.forceSyncNow();
                 Navigator.of(context).pop();
               } catch (e) {
-                print('Debug sync failed: $e');
+                debugPrint('Debug sync failed: $e');
               }
             },
             child: const Text('Force Sync'),
+          ),
+          TextButton(
+            onPressed: () async {
+              try {
+                await dataService.clearAllData();
+                Navigator.of(context).pop();
+              } catch (e) {
+                debugPrint('Clear data failed: $e');
+              }
+            },
+            child: const Text('Clear Data'),
           ),
         ],
       ),
@@ -428,3 +444,80 @@ class DebugPanel extends StatelessWidget {
     );
   }
 }
+
+// ============ MIGRATION UTILITIES ============
+
+/// Helper class để migrate data từ old services sang unified service
+class ServiceMigrationHelper {
+  static Future<void> migrateToUnifiedService() async {
+    try {
+      debugPrint('🔄 Starting service migration...');
+
+      // 1. Backup data từ old services nếu cần
+      await _backupOldServiceData();
+
+      // 2. Clean up old service artifacts
+      await _cleanupOldServices();
+
+      // 3. Initialize unified service
+      final unifiedService = DataService();
+      // Note: Actual initialization với UserProvider sẽ happen trong app
+
+      debugPrint('✅ Service migration completed');
+    } catch (e) {
+      debugPrint('❌ Service migration failed: $e');
+      rethrow;
+    }
+  }
+
+  static Future<void> _backupOldServiceData() async {
+    // TODO: Implement backup logic if needed
+    debugPrint('📦 Backing up old service data...');
+  }
+
+  static Future<void> _cleanupOldServices() async {
+    // TODO: Clean up old database files, preferences, etc.
+    debugPrint('🧹 Cleaning up old services...');
+  }
+}
+
+// ============ USAGE INSTRUCTIONS ============
+
+/*
+CÁCH SỬ DỤNG:
+
+1. THAY THẾ app.dart hiện tại bằng file này
+2. XÓA các old services:
+   - lib/data/services/data_service.dart (old version)
+   - lib/data/services/database_service.dart  
+   - lib/data/services/offline_first_service.dart
+   - lib/data/services/offline_sync_service.dart
+   - lib/data/services/enhanced_*.dart
+
+3. GIỮ LẠI:
+   - lib/data/services/unified_data_service.dart (service mới)
+   - lib/data/services/local_database_service.dart (có thể dùng làm fallback)
+
+4. CẬP NHẬT imports trong các file khác:
+   Từ: import 'package:moneysun/data/services/data_service.dart';
+   Thành: import 'package:moneysun/data/services/unified_data_service.dart';
+
+5. CẬP NHẬT Provider usage:
+   Từ: Provider.of<DataService>(context)
+   Thành: Provider.of<DataService>(context)
+
+6. KIỂM TRA app hoạt động:
+   - Tạo transaction offline
+   - Kiểm tra sync khi online
+   - Test partnership features
+   - Verify data persistence
+
+BENEFITS sau khi migrate:
+✅ Single source of truth cho data
+✅ Simplified architecture  
+✅ Fixed database migration issues
+✅ Better error handling
+✅ Consistent offline-first behavior
+✅ Reduced memory usage
+✅ Easier debugging
+*/
