@@ -1,879 +1,721 @@
-// lib/data/services/enhanced_local_database_service.dart
+// lib/data/services/enhanced_local_database_service.dart - FIXED & UNIFIED
 import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
-import 'package:moneysun/data/models/budget_model.dart';
+import 'package:path/path.dart';
+import 'package:moneysun/data/models/transaction_model.dart';
+import 'package:moneysun/data/models/wallet_model.dart';
 import 'package:moneysun/data/models/category_model.dart';
-import 'package:moneysun/data/services/local_database_service.dart';
+import 'package:moneysun/data/models/budget_model.dart';
 
-extension EnhancedLocalDatabase on LocalDatabaseService {
-  // ============ ENHANCED BUDGETS METHODS ============
+/// Enhanced Local Database Service - Replaces LocalDatabaseService
+/// Fixes all database inconsistencies and implements proper offline-first storage
+class EnhancedLocalDatabaseService {
+  static Database? _database;
+  static const String _databaseName = 'moneysun_unified.db';
+  static const int _databaseVersion = 3; // Incremented for unified schema
 
-  /// Create enhanced budgets table
-  Future<void> createEnhancedBudgetsTable(Database db) async {
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS enhanced_budgets (
-        id TEXT PRIMARY KEY,
-        ownerId TEXT NOT NULL,
-        month TEXT NOT NULL,
-        totalAmount REAL NOT NULL DEFAULT 0,
-        categoryAmounts TEXT DEFAULT '{}',
-        budgetType TEXT DEFAULT 'personal',
-        period TEXT DEFAULT 'monthly',
-        createdBy TEXT,
-        createdAt INTEGER,
-        updatedAt INTEGER,
-        startDate INTEGER,
-        endDate INTEGER,
-        isActive INTEGER DEFAULT 1,
-        notes TEXT DEFAULT '{}',
-        categoryLimits TEXT DEFAULT '{}',
-        version INTEGER DEFAULT 1,
-        isDeleted INTEGER DEFAULT 0,
-        syncStatus INTEGER DEFAULT 0,
-        lastModified INTEGER DEFAULT (strftime('%s', 'now')),
-        
-        UNIQUE(ownerId, month, budgetType),
-        FOREIGN KEY (ownerId) REFERENCES users(id)
-      )
-    ''');
+  static final EnhancedLocalDatabaseService _instance =
+      EnhancedLocalDatabaseService._internal();
+  factory EnhancedLocalDatabaseService() => _instance;
+  EnhancedLocalDatabaseService._internal();
 
-    // Create indexes for better query performance
-    await db.execute('''
-      CREATE INDEX IF NOT EXISTS idx_enhanced_budgets_owner_month 
-      ON enhanced_budgets(ownerId, month)
-    ''');
-
-    await db.execute('''
-      CREATE INDEX IF NOT EXISTS idx_enhanced_budgets_type_active 
-      ON enhanced_budgets(budgetType, isActive)
-    ''');
-
-    await db.execute('''
-      CREATE INDEX IF NOT EXISTS idx_enhanced_budgets_sync 
-      ON enhanced_budgets(syncStatus, lastModified)
-    ''');
+  Future<Database> get database async {
+    _database ??= await _initDatabase();
+    return _database!;
   }
 
-  /// Save budget with ownership support
-  Future<void> saveBudgetWithOwnership(
-    Budget budget, {
-    int syncStatus = 0,
-  }) async {
-    final db = await database;
+  Future<Database> _initDatabase() async {
+    try {
+      String path = join(await getDatabasesPath(), _databaseName);
+      print('📁 Enhanced Database path: $path');
 
-    await db.insert('enhanced_budgets', {
-      'id': budget.id,
-      'ownerId': budget.ownerId,
-      'month': budget.month,
-      'totalAmount': budget.totalAmount,
-      'categoryAmounts': jsonEncode(budget.categoryAmounts),
-      'budgetType': budget.budgetType.name,
-      'period': budget.period.name,
-      'createdBy': budget.createdBy,
-      'createdAt': budget.createdAt?.millisecondsSinceEpoch,
-      'updatedAt':
-          budget.updatedAt?.millisecondsSinceEpoch ??
-          DateTime.now().millisecondsSinceEpoch,
-      'startDate': budget.startDate?.millisecondsSinceEpoch,
-      'endDate': budget.endDate?.millisecondsSinceEpoch,
-      'isActive': budget.isActive ? 1 : 0,
-      'notes': jsonEncode(budget.notes ?? {}),
-      'categoryLimits': jsonEncode(budget.categoryLimits ?? {}),
-      'version': budget.version,
-      'isDeleted': budget.isDeleted ? 1 : 0,
-      'syncStatus': syncStatus,
-      'lastModified': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
-
-    if (syncStatus == 0) {
-      await addToSyncQueue(
-        'enhanced_budgets',
-        budget.id,
-        'INSERT',
-        budget.toJson(),
+      return await openDatabase(
+        path,
+        version: _databaseVersion,
+        onCreate: _createUnifiedTables,
+        onUpgrade: _upgradeDatabase,
+        onOpen: (db) async {
+          await db.execute('PRAGMA foreign_keys = ON');
+          print('✅ Enhanced database opened successfully');
+        },
       );
+    } catch (e) {
+      print('❌ Error initializing enhanced database: $e');
+      rethrow;
     }
   }
 
-  /// Get budgets with ownership filtering
-  Future<List<Budget>> getBudgetsWithOwnership(
-    String userId,
-    String? partnershipId, {
-    String? month,
-    BudgetType? budgetType,
-    bool includeInactive = false,
-    bool includeDeleted = false,
-  }) async {
-    final db = await database;
+  // ============ UNIFIED TABLE CREATION ============
 
-    String whereClause = '(ownerId = ?';
-    List<dynamic> whereArgs = [userId];
-
-    // Include shared budgets if partnership exists
-    if (partnershipId != null) {
-      whereClause += ' OR ownerId = ?';
-      whereArgs.add(partnershipId);
-    }
-    whereClause += ')';
-
-    // Add additional filters
-    if (month != null) {
-      whereClause += ' AND month = ?';
-      whereArgs.add(month);
-    }
-
-    if (budgetType != null) {
-      whereClause += ' AND budgetType = ?';
-      whereArgs.add(budgetType.name);
-    }
-
-    if (!includeInactive) {
-      whereClause += ' AND isActive = 1';
-    }
-
-    if (!includeDeleted) {
-      whereClause += ' AND isDeleted = 0';
-    }
-
-    final result = await db.query(
-      'enhanced_budgets',
-      where: whereClause,
-      whereArgs: whereArgs,
-      orderBy: 'month DESC, budgetType ASC, updatedAt DESC',
-    );
-
-    return result.map((map) => _budgetFromMap(map)).toList();
-  }
-
-  /// Get budget by month and type with ownership
-  Future<Budget?> getBudgetByMonthAndType(
-    String month,
-    BudgetType budgetType,
-    String userId,
-    String? partnershipId,
-  ) async {
-    final db = await database;
-
-    String ownerId = budgetType == BudgetType.shared
-        ? (partnershipId ?? userId)
-        : userId;
-
-    final result = await db.query(
-      'enhanced_budgets',
-      where:
-          'ownerId = ? AND month = ? AND budgetType = ? AND isActive = 1 AND isDeleted = 0',
-      whereArgs: [ownerId, month, budgetType.name],
-      limit: 1,
-    );
-
-    if (result.isNotEmpty) {
-      return _budgetFromMap(result.first);
-    }
-    return null;
-  }
-
-  /// Update budget locally
-  Future<void> updateBudgetWithOwnership(Budget budget) async {
-    final db = await database;
-
-    await db.update(
-      'enhanced_budgets',
-      {
-        'totalAmount': budget.totalAmount,
-        'categoryAmounts': jsonEncode(budget.categoryAmounts),
-        'notes': jsonEncode(budget.notes ?? {}),
-        'categoryLimits': jsonEncode(budget.categoryLimits ?? {}),
-        'isActive': budget.isActive ? 1 : 0,
-        'version': budget.version + 1,
-        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-        'lastModified': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        'syncStatus': 0, // Mark as needing sync
-      },
-      where: 'id = ?',
-      whereArgs: [budget.id],
-    );
-
-    // Add to sync queue
-    await addToSyncQueue(
-      'enhanced_budgets',
-      budget.id,
-      'UPDATE',
-      budget.toJson(),
-    );
-  }
-
-  /// Soft delete budget
-  Future<void> softDeleteBudget(String budgetId) async {
-    final db = await database;
-
-    await db.update(
-      'enhanced_budgets',
-      {
-        'isDeleted': 1,
-        'isActive': 0,
-        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-        'lastModified': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        'syncStatus': 0,
-      },
-      where: 'id = ?',
-      whereArgs: [budgetId],
-    );
-
-    await addToSyncQueue('enhanced_budgets', budgetId, 'DELETE', {
-      'id': budgetId,
-    });
-  }
-
-  /// Get budget recommendations based on historical data
-  Future<Map<String, double>> getBudgetRecommendations(
-    String userId,
-    String month, {
-    int lookbackMonths = 3,
-  }) async {
-    final db = await database;
+  Future<void> _createUnifiedTables(Database db, int version) async {
+    print('🔨 Creating unified database tables v$version...');
 
     try {
-      // Get spending data from transactions for the last N months
-      final result = await db.rawQuery(
-        '''
-        SELECT 
-          t.categoryId,
-          c.name as categoryName,
-          AVG(monthly_spending.total) as avgSpending,
-          COUNT(monthly_spending.month) as monthCount
-        FROM (
-          SELECT 
-            categoryId,
-            strftime('%Y-%m', date) as month,
-            SUM(amount) as total
-          FROM transactions t
-          WHERE userId = ? 
-            AND type = 'expense'
-            AND categoryId IS NOT NULL
-            AND strftime('%Y-%m', date) >= date(?, '-$lookbackMonths months')
-            AND strftime('%Y-%m', date) < ?
-          GROUP BY categoryId, month
-        ) monthly_spending
-        JOIN transactions t ON monthly_spending.categoryId = t.categoryId
-        LEFT JOIN enhanced_categories c ON t.categoryId = c.id
-        WHERE t.userId = ?
-        GROUP BY t.categoryId
-        HAVING monthCount >= 2
-        ORDER BY avgSpending DESC
-      ''',
-        [userId, month, month, userId],
-      );
+      // Users table for sync metadata
+      await db.execute('''
+        CREATE TABLE users (
+          id TEXT PRIMARY KEY,
+          displayName TEXT,
+          email TEXT,
+          partnershipId TEXT,
+          lastSyncTime INTEGER,
+          createdAt INTEGER DEFAULT (strftime('%s', 'now')),
+          updatedAt INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      ''');
 
-      final recommendations = <String, double>{};
-      for (final row in result) {
-        final categoryId = row['categoryId'] as String;
-        final avgSpending = (row['avgSpending'] as num).toDouble();
+      // Unified Transactions table
+      await db.execute('''
+        CREATE TABLE transactions (
+          id TEXT PRIMARY KEY,
+          firebase_id TEXT UNIQUE,
+          amount REAL NOT NULL,
+          type TEXT NOT NULL CHECK (type IN ('income', 'expense', 'transfer')),
+          category_id TEXT,
+          wallet_id TEXT NOT NULL,
+          date TEXT NOT NULL,
+          description TEXT DEFAULT '',
+          user_id TEXT NOT NULL,
+          sub_category_id TEXT,
+          transfer_to_wallet_id TEXT,
+          
+          -- Sync metadata
+          sync_status INTEGER DEFAULT 0 CHECK (sync_status IN (0, 1)),
+          last_modified INTEGER DEFAULT (strftime('%s', 'now')),
+          version INTEGER DEFAULT 1,
+          conflict_data TEXT,
+          
+          -- Timestamps  
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+          deleted_at INTEGER,
+          
+          FOREIGN KEY (wallet_id) REFERENCES wallets(id),
+          FOREIGN KEY (category_id) REFERENCES categories(id),
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+      ''');
 
-        // Add 15% buffer to average spending
-        recommendations[categoryId] = (avgSpending * 1.15).roundToDouble();
+      // Unified Wallets table
+      await db.execute('''
+        CREATE TABLE wallets (
+          id TEXT PRIMARY KEY,
+          firebase_id TEXT UNIQUE,
+          name TEXT NOT NULL,
+          balance REAL NOT NULL DEFAULT 0,
+          ownerId TEXT NOT NULL,
+          isVisibleToPartner INTEGER DEFAULT 1 CHECK (isVisibleToPartner IN (0, 1)),
+          type TEXT DEFAULT 'general' CHECK (type IN ('general', 'cash', 'bank', 'credit', 'investment', 'savings', 'digital')),
+          currency TEXT DEFAULT 'VND',
+          
+          -- Enhanced fields
+          isArchived INTEGER DEFAULT 0 CHECK (isArchived IN (0, 1)),
+          archivedAt INTEGER,
+          lastAdjustment TEXT, -- JSON for adjustment data
+          
+          -- Sync metadata
+          sync_status INTEGER DEFAULT 0 CHECK (sync_status IN (0, 1)),
+          last_modified INTEGER DEFAULT (strftime('%s', 'now')),
+          version INTEGER DEFAULT 1,
+          
+          -- Timestamps
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          FOREIGN KEY (ownerId) REFERENCES users(id)
+        )
+      ''');
+
+      // Unified Categories table
+      await db.execute('''
+        CREATE TABLE categories (
+          id TEXT PRIMARY KEY,
+          firebase_id TEXT UNIQUE,
+          name TEXT NOT NULL,
+          ownerId TEXT NOT NULL,
+          type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
+          iconCodePoint INTEGER,
+          subCategories TEXT DEFAULT '{}', -- JSON
+          
+          -- Enhanced fields
+          ownershipType TEXT DEFAULT 'personal' CHECK (ownershipType IN ('personal', 'shared')),
+          createdBy TEXT,
+          isArchived INTEGER DEFAULT 0 CHECK (isArchived IN (0, 1)),
+          isActive INTEGER DEFAULT 1 CHECK (isActive IN (0, 1)),
+          usageCount INTEGER DEFAULT 0,
+          lastUsed INTEGER,
+          metadata TEXT DEFAULT '{}', -- JSON
+          
+          -- Sync metadata
+          sync_status INTEGER DEFAULT 0 CHECK (sync_status IN (0, 1)),
+          last_modified INTEGER DEFAULT (strftime('%s', 'now')),
+          version INTEGER DEFAULT 1,
+          
+          -- Timestamps
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          UNIQUE(ownerId, name, type),
+          FOREIGN KEY (ownerId) REFERENCES users(id),
+          FOREIGN KEY (createdBy) REFERENCES users(id)
+        )
+      ''');
+
+      // Unified Budgets table
+      await db.execute('''
+        CREATE TABLE budgets (
+          id TEXT PRIMARY KEY,
+          firebase_id TEXT UNIQUE,
+          ownerId TEXT NOT NULL,
+          month TEXT NOT NULL,
+          totalAmount REAL NOT NULL DEFAULT 0,
+          categoryAmounts TEXT DEFAULT '{}', -- JSON
+          
+          -- Enhanced fields
+          budgetType TEXT DEFAULT 'personal' CHECK (budgetType IN ('personal', 'shared')),
+          period TEXT DEFAULT 'monthly' CHECK (period IN ('weekly', 'monthly', 'quarterly', 'yearly', 'custom')),
+          createdBy TEXT,
+          startDate INTEGER,
+          endDate INTEGER,
+          isActive INTEGER DEFAULT 1 CHECK (isActive IN (0, 1)),
+          notes TEXT DEFAULT '{}', -- JSON
+          categoryLimits TEXT DEFAULT '{}', -- JSON
+          isDeleted INTEGER DEFAULT 0 CHECK (isDeleted IN (0, 1)),
+          
+          -- Sync metadata
+          sync_status INTEGER DEFAULT 0 CHECK (sync_status IN (0, 1)),
+          last_modified INTEGER DEFAULT (strftime('%s', 'now')),
+          version INTEGER DEFAULT 1,
+          
+          -- Timestamps
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          UNIQUE(ownerId, month, budgetType),
+          FOREIGN KEY (ownerId) REFERENCES users(id),
+          FOREIGN KEY (createdBy) REFERENCES users(id)
+        )
+      ''');
+
+      // Enhanced Description History table
+      await db.execute('''
+        CREATE TABLE description_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          userId TEXT NOT NULL,
+          description TEXT NOT NULL,
+          usageCount INTEGER DEFAULT 1,
+          lastUsed INTEGER DEFAULT (strftime('%s', 'now')),
+          createdAt INTEGER DEFAULT (strftime('%s', 'now')),
+          updatedAt INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          -- Context for smart suggestions
+          type TEXT CHECK (type IN ('income', 'expense', 'transfer')),
+          categoryId TEXT,
+          amount REAL,
+          confidence REAL DEFAULT 0, -- AI confidence score
+          
+          UNIQUE(userId, description),
+          FOREIGN KEY (userId) REFERENCES users(id),
+          FOREIGN KEY (categoryId) REFERENCES categories(id)
+        )
+      ''');
+
+      // Sync Queue table for offline operations
+      await db.execute('''
+        CREATE TABLE sync_queue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tableName TEXT NOT NULL,
+          recordId TEXT NOT NULL,
+          firebase_id TEXT,
+          operation TEXT NOT NULL CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE')),
+          data TEXT NOT NULL, -- JSON
+          priority INTEGER DEFAULT 1 CHECK (priority IN (1, 2, 3)),
+          retry_count INTEGER DEFAULT 0,
+          max_retries INTEGER DEFAULT 3,
+          last_error TEXT,
+          scheduled_at INTEGER DEFAULT (strftime('%s', 'now')),
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          UNIQUE(tableName, recordId, operation)
+        )
+      ''');
+
+      // Sync Metadata table
+      await db.execute('''
+        CREATE TABLE sync_metadata (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      ''');
+
+      // Change Log table for audit trail
+      await db.execute('''
+        CREATE TABLE change_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          table_name TEXT NOT NULL,
+          record_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          changes TEXT, -- JSON diff
+          user_id TEXT NOT NULL,
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+      ''');
+
+      // Create all indexes
+      await _createOptimizedIndexes(db);
+
+      print('✅ Unified database tables created successfully');
+    } catch (e) {
+      print('❌ Error creating unified tables: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> _createOptimizedIndexes(Database db) async {
+    final indexes = [
+      // Transaction indexes
+      'CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, date DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_transactions_wallet_date ON transactions(wallet_id, date DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category_id)',
+      'CREATE INDEX IF NOT EXISTS idx_transactions_sync ON transactions(sync_status, last_modified)',
+      'CREATE INDEX IF NOT EXISTS idx_transactions_type_date ON transactions(type, date DESC)',
+
+      // Wallet indexes
+      'CREATE INDEX IF NOT EXISTS idx_wallets_owner ON wallets(ownerId, isArchived)',
+      'CREATE INDEX IF NOT EXISTS idx_wallets_sync ON wallets(sync_status, last_modified)',
+      'CREATE INDEX IF NOT EXISTS idx_wallets_type ON wallets(type)',
+
+      // Category indexes
+      'CREATE INDEX IF NOT EXISTS idx_categories_owner_type ON categories(ownerId, type, isArchived)',
+      'CREATE INDEX IF NOT EXISTS idx_categories_ownership ON categories(ownershipType, isActive)',
+      'CREATE INDEX IF NOT EXISTS idx_categories_usage ON categories(usageCount DESC, lastUsed DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_categories_sync ON categories(sync_status, last_modified)',
+
+      // Budget indexes
+      'CREATE INDEX IF NOT EXISTS idx_budgets_owner_month ON budgets(ownerId, month, budgetType)',
+      'CREATE INDEX IF NOT EXISTS idx_budgets_type_active ON budgets(budgetType, isActive, isDeleted)',
+      'CREATE INDEX IF NOT EXISTS idx_budgets_sync ON budgets(sync_status, last_modified)',
+
+      // Description history indexes
+      'CREATE INDEX IF NOT EXISTS idx_description_user_usage ON description_history(userId, usageCount DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_description_user_lastused ON description_history(userId, lastUsed DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_description_text_search ON description_history(description)',
+      'CREATE INDEX IF NOT EXISTS idx_description_context ON description_history(userId, type, categoryId)',
+
+      // Sync queue indexes
+      'CREATE INDEX IF NOT EXISTS idx_sync_queue_priority ON sync_queue(priority DESC, created_at ASC)',
+      'CREATE INDEX IF NOT EXISTS idx_sync_queue_retry ON sync_queue(retry_count, scheduled_at)',
+
+      // Change log indexes
+      'CREATE INDEX IF NOT EXISTS idx_change_log_user_time ON change_log(user_id, created_at DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_change_log_table_record ON change_log(table_name, record_id)',
+    ];
+
+    for (final indexSql in indexes) {
+      try {
+        await db.execute(indexSql);
+      } catch (e) {
+        print('⚠️ Warning: Could not create index: $e');
+      }
+    }
+  }
+
+  // ============ DATABASE UPGRADE LOGIC ============
+
+  Future<void> _upgradeDatabase(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
+    print('🔄 Upgrading database from v$oldVersion to v$newVersion');
+
+    try {
+      if (oldVersion < 3) {
+        // Major upgrade - recreate with unified schema
+        await _migrateToUnifiedSchema(db, oldVersion);
+      }
+    } catch (e) {
+      print('❌ Database upgrade failed: $e');
+      // Emergency reset if upgrade fails
+      await _emergencyReset();
+      rethrow;
+    }
+  }
+
+  Future<void> _migrateToUnifiedSchema(Database db, int oldVersion) async {
+    print('🔧 Migrating to unified schema...');
+
+    try {
+      // Backup existing data
+      Map<String, List<Map<String, dynamic>>> backup = {};
+
+      final tables = [
+        'transactions',
+        'wallets',
+        'categories',
+        'budgets',
+        'description_history',
+      ];
+      for (final table in tables) {
+        try {
+          backup[table] = await db.query(table);
+          print('📦 Backed up ${backup[table]!.length} records from $table');
+        } catch (e) {
+          print('⚠️ Could not backup $table: $e');
+          backup[table] = [];
+        }
       }
 
-      return recommendations;
+      // Drop existing tables
+      for (final table in tables) {
+        try {
+          await db.execute('DROP TABLE IF EXISTS $table');
+        } catch (e) {
+          print('⚠️ Could not drop $table: $e');
+        }
+      }
+
+      // Create new unified tables
+      await _createUnifiedTables(db, 3);
+
+      // Restore data with new schema
+      await _restoreBackupData(db, backup);
+
+      print('✅ Migration to unified schema completed');
     } catch (e) {
-      print('Error getting budget recommendations: $e');
-      return {};
+      print('❌ Migration failed: $e');
+      rethrow;
     }
   }
 
-  // ============ ENHANCED CATEGORIES METHODS ============
-
-  /// Create enhanced categories table
-  Future<void> createEnhancedCategoriesTable(Database db) async {
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS enhanced_categories (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        ownerId TEXT NOT NULL,
-        type TEXT NOT NULL,
-        iconCodePoint INTEGER,
-        subCategories TEXT DEFAULT '{}',
-        ownershipType TEXT DEFAULT 'personal',
-        createdBy TEXT,
-        createdAt INTEGER,
-        updatedAt INTEGER,
-        isArchived INTEGER DEFAULT 0,
-        isActive INTEGER DEFAULT 1,
-        usageCount INTEGER DEFAULT 0,
-        lastUsed INTEGER,
-        version INTEGER DEFAULT 1,
-        metadata TEXT DEFAULT '{}',
-        syncStatus INTEGER DEFAULT 0,
-        lastModified INTEGER DEFAULT (strftime('%s', 'now')),
-        
-        UNIQUE(ownerId, name, type),
-        FOREIGN KEY (ownerId) REFERENCES users(id)
-      )
-    ''');
-
-    // Create indexes
-    await db.execute('''
-      CREATE INDEX IF NOT EXISTS idx_enhanced_categories_owner_type 
-      ON enhanced_categories(ownerId, type, isActive)
-    ''');
-
-    await db.execute('''
-      CREATE INDEX IF NOT EXISTS idx_enhanced_categories_ownership 
-      ON enhanced_categories(ownershipType, type)
-    ''');
-
-    await db.execute('''
-      CREATE INDEX IF NOT EXISTS idx_enhanced_categories_usage 
-      ON enhanced_categories(usageCount DESC, lastUsed DESC)
-    ''');
-
-    await db.execute('''
-      CREATE INDEX IF NOT EXISTS idx_enhanced_categories_sync 
-      ON enhanced_categories(syncStatus, lastModified)
-    ''');
-  }
-
-  /// Save category with ownership support
-  Future<void> saveCategoryWithOwnership(
-    Category category, {
-    int syncStatus = 0,
-  }) async {
-    final db = await database;
-
-    await db.insert('enhanced_categories', {
-      'id': category.id,
-      'name': category.name,
-      'ownerId': category.ownerId,
-      'type': category.type,
-      'iconCodePoint': category.iconCodePoint,
-      'subCategories': jsonEncode(category.subCategories),
-      'ownershipType': category.ownershipType.name,
-      'createdBy': category.createdBy,
-      'createdAt': category.createdAt?.millisecondsSinceEpoch,
-      'updatedAt':
-          category.updatedAt?.millisecondsSinceEpoch ??
-          DateTime.now().millisecondsSinceEpoch,
-      'isArchived': category.isArchived ? 1 : 0,
-      'isActive': category.isActive ? 1 : 0,
-      'usageCount': category.usageCount,
-      'lastUsed': category.lastUsed?.millisecondsSinceEpoch,
-      'version': category.version,
-      'metadata': jsonEncode(category.metadata ?? {}),
-      'syncStatus': syncStatus,
-      'lastModified': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
-
-    if (syncStatus == 0) {
-      await addToSyncQueue(
-        'enhanced_categories',
-        category.id,
-        'INSERT',
-        category.toJson(),
-      );
-    }
-  }
-
-  /// Get categories with ownership filtering
-  Future<List<Category>> getCategoriesWithOwnership(
-    String userId,
-    String? partnershipId, {
-    String? type,
-    CategoryOwnershipType? ownershipType,
-    bool includeArchived = false,
-    bool includeInactive = false,
-  }) async {
-    final db = await database;
-
-    String whereClause = '(ownerId = ?';
-    List<dynamic> whereArgs = [userId];
-
-    // Include shared categories if partnership exists
-    if (partnershipId != null) {
-      whereClause += ' OR ownerId = ?';
-      whereArgs.add(partnershipId);
-    }
-    whereClause += ')';
-
-    // Add additional filters
-    if (type != null) {
-      whereClause += ' AND type = ?';
-      whereArgs.add(type);
-    }
-
-    if (ownershipType != null) {
-      whereClause += ' AND ownershipType = ?';
-      whereArgs.add(ownershipType.name);
-    }
-
-    if (!includeArchived) {
-      whereClause += ' AND isArchived = 0';
-    }
-
-    if (!includeInactive) {
-      whereClause += ' AND isActive = 1';
-    }
-
-    final result = await db.query(
-      'enhanced_categories',
-      where: whereClause,
-      whereArgs: whereArgs,
-      orderBy: 'ownershipType ASC, usageCount DESC, name ASC',
-    );
-
-    return result.map((map) => _categoryFromMap(map)).toList();
-  }
-
-  /// Update category usage statistics
-  Future<void> updateCategoryUsage(String categoryId) async {
-    final db = await database;
-
-    await db.update(
-      'enhanced_categories',
-      {
-        'usageCount': 'usageCount + 1',
-        'lastUsed': DateTime.now().millisecondsSinceEpoch,
-        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-        'lastModified': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      },
-      where: 'id = ?',
-      whereArgs: [categoryId],
-    );
-  }
-
-  /// Get smart category suggestions
-  Future<List<CategorySuggestion>> getSmartCategorySuggestions(
-    String description,
-    String type,
-    double amount,
-    String userId,
-    String? partnershipId, {
-    int limit = 5,
-  }) async {
-    final categories = await getCategoriesWithOwnership(
-      userId,
-      partnershipId,
-      type: type,
-    );
-
-    if (categories.isEmpty) return [];
-
-    final suggestion = CategoryUtils.suggestCategory(
-      description,
-      categories,
-      amount,
-    );
-
-    // Get additional suggestions based on usage
-    final usageSuggestions = categories
-        .where((c) => c.id != suggestion.categoryId)
-        .take(limit - 1)
-        .map(
-          (c) => CategorySuggestion(
-            categoryId: c.id,
-            categoryName: c.name,
-            confidence: c.popularityScore / 10, // Scale down
-            reason: 'Thường sử dụng',
-            ownershipType: c.ownershipType,
-          ),
-        )
-        .toList();
-
-    return [suggestion, ...usageSuggestions];
-  }
-
-  /// Archive category
-  Future<void> archiveCategoryWithOwnership(String categoryId) async {
-    final db = await database;
-
-    await db.update(
-      'enhanced_categories',
-      {
-        'isArchived': 1,
-        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-        'lastModified': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        'syncStatus': 0,
-      },
-      where: 'id = ?',
-      whereArgs: [categoryId],
-    );
-
-    await addToSyncQueue('enhanced_categories', categoryId, 'UPDATE', {
-      'id': categoryId,
-      'isArchived': true,
-    });
-  }
-
-  /// Get category usage statistics
-  Future<List<CategoryUsage>> getCategoryUsageStatistics(
-    String userId, {
-    String? type,
-    int limit = 10,
-  }) async {
-    final db = await database;
-
-    String whereClause =
-        'c.ownerId = ? AND c.isActive = 1 AND c.isArchived = 0';
-    List<dynamic> whereArgs = [userId];
-
-    if (type != null) {
-      whereClause += ' AND c.type = ?';
-      whereArgs.add(type);
-    }
-
-    final result = await db.rawQuery(
-      '''
-      SELECT 
-        c.id as categoryId,
-        c.name as categoryName,
-        c.usageCount,
-        c.lastUsed,
-        COALESCE(AVG(t.amount), 0) as averageAmount,
-        GROUP_CONCAT(DISTINCT t.description) as descriptions
-      FROM enhanced_categories c
-      LEFT JOIN transactions t ON c.id = t.categoryId
-      WHERE $whereClause
-      GROUP BY c.id, c.name, c.usageCount, c.lastUsed
-      ORDER BY c.usageCount DESC, c.lastUsed DESC
-      LIMIT ?
-    ''',
-      [...whereArgs, limit],
-    );
-
-    return result.map((row) {
-      final descriptionsStr = row['descriptions'] as String?;
-      final descriptions = descriptionsStr != null
-          ? descriptionsStr.split(',').take(5).toList()
-          : <String>[];
-
-      return CategoryUsage(
-        categoryId: row['categoryId'] as String,
-        categoryName: row['categoryName'] as String,
-        usageCount: row['usageCount'] as int,
-        lastUsed: row['lastUsed'] != null
-            ? DateTime.fromMillisecondsSinceEpoch(row['lastUsed'] as int)
-            : DateTime.now(),
-        averageAmount: (row['averageAmount'] as num).toDouble(),
-        commonDescriptions: descriptions,
-      );
-    }).toList();
-  }
-
-  /// Check if category has transactions
-  Future<bool> checkCategoryHasTransactions(String categoryId) async {
-    final db = await database;
-
-    final result = await db.query(
-      'transactions',
-      where: 'categoryId = ?',
-      whereArgs: [categoryId],
-      limit: 1,
-    );
-
-    return result.isNotEmpty;
-  }
-
-  // ============ SYNC MANAGEMENT ============
-
-  /// Get unsynced records with enhanced filtering
-  Future<List<Map<String, dynamic>>> getUnsyncedRecordsEnhanced(
-    String tableName, {
-    int limit = 50,
-    int priority = 1,
-  }) async {
-    final db = await database;
-
-    return await db.query(
-      tableName,
-      where: 'syncStatus = 0',
-      orderBy: 'lastModified ASC',
-      limit: limit,
-    );
-  }
-
-  /// Mark multiple records as synced
-  Future<void> markMultipleAsSynced(
-    String tableName,
-    List<String> recordIds,
+  Future<void> _restoreBackupData(
+    Database db,
+    Map<String, List<Map<String, dynamic>>> backup,
   ) async {
-    final db = await database;
+    print('📥 Restoring backup data...');
 
-    if (recordIds.isEmpty) return;
+    try {
+      // Restore transactions
+      final transactions = backup['transactions'] ?? [];
+      for (final transaction in transactions) {
+        try {
+          await db.insert('transactions', _migrateTransactionData(transaction));
+        } catch (e) {
+          print('⚠️ Could not restore transaction: $e');
+        }
+      }
 
-    final placeholders = recordIds.map((_) => '?').join(',');
-    await db.update(
-      tableName,
-      {
-        'syncStatus': 1,
-        'lastModified': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      },
-      where: 'id IN ($placeholders)',
-      whereArgs: recordIds,
-    );
+      // Restore wallets
+      final wallets = backup['wallets'] ?? [];
+      for (final wallet in wallets) {
+        try {
+          await db.insert('wallets', _migrateWalletData(wallet));
+        } catch (e) {
+          print('⚠️ Could not restore wallet: $e');
+        }
+      }
+
+      // Restore categories
+      final categories = backup['categories'] ?? [];
+      for (final category in categories) {
+        try {
+          await db.insert('categories', _migrateCategoryData(category));
+        } catch (e) {
+          print('⚠️ Could not restore category: $e');
+        }
+      }
+
+      // Restore budgets
+      final budgets = backup['budgets'] ?? [];
+      for (final budget in budgets) {
+        try {
+          await db.insert('budgets', _migrateBudgetData(budget));
+        } catch (e) {
+          print('⚠️ Could not restore budget: $e');
+        }
+      }
+
+      // Restore description history
+      final descriptions = backup['description_history'] ?? [];
+      for (final desc in descriptions) {
+        try {
+          await db.insert('description_history', _migrateDescriptionData(desc));
+        } catch (e) {
+          print('⚠️ Could not restore description: $e');
+        }
+      }
+
+      print('✅ Backup data restored successfully');
+    } catch (e) {
+      print('❌ Restore failed: $e');
+      rethrow;
+    }
   }
 
-  /// Get enhanced sync status
-  Future<Map<String, dynamic>> getEnhancedSyncStatus() async {
-    final db = await database;
+  // ============ DATA MIGRATION HELPERS ============
 
-    final results = await Future.wait([
-      db.rawQuery(
-        'SELECT COUNT(*) as count FROM enhanced_budgets WHERE syncStatus = 0',
-      ),
-      db.rawQuery(
-        'SELECT COUNT(*) as count FROM enhanced_categories WHERE syncStatus = 0',
-      ),
-      db.rawQuery(
-        'SELECT COUNT(*) as count FROM transactions WHERE syncStatus = 0',
-      ),
-      db.rawQuery('SELECT COUNT(*) as count FROM wallets WHERE syncStatus = 0'),
-      db.rawQuery('SELECT COUNT(*) as count FROM enhanced_budgets'),
-      db.rawQuery('SELECT COUNT(*) as count FROM enhanced_categories'),
-    ]);
-
+  Map<String, dynamic> _migrateTransactionData(Map<String, dynamic> old) {
     return {
-      'unsyncedBudgets': results[0].first['count'] as int,
-      'unsyncedCategories': results[1].first['count'] as int,
-      'unsyncedTransactions': results[2].first['count'] as int,
-      'unsyncedWallets': results[3].first['count'] as int,
-      'totalBudgets': results[4].first['count'] as int,
-      'totalCategories': results[5].first['count'] as int,
-      'lastUpdate': DateTime.now().toIso8601String(),
+      'id': old['id'],
+      'amount': old['amount'],
+      'type': old['type'],
+      'category_id': old['categoryId'] ?? old['category_id'],
+      'wallet_id': old['walletId'] ?? old['wallet_id'],
+      'date': old['date'],
+      'description': old['description'] ?? '',
+      'user_id': old['userId'] ?? old['user_id'],
+      'sub_category_id': old['subCategoryId'] ?? old['sub_category_id'],
+      'transfer_to_wallet_id':
+          old['transferToWalletId'] ?? old['transfer_to_wallet_id'],
+      'sync_status': old['syncStatus'] ?? old['sync_status'] ?? 0,
+      'created_at':
+          old['createdAt'] ??
+          old['created_at'] ??
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      'updated_at':
+          old['updatedAt'] ??
+          old['updated_at'] ??
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000),
     };
   }
 
-  // ============ CONFLICT RESOLUTION ============
+  Map<String, dynamic> _migrateWalletData(Map<String, dynamic> old) {
+    return {
+      'id': old['id'],
+      'name': old['name'],
+      'balance': old['balance'],
+      'ownerId': old['ownerId'],
+      'isVisibleToPartner': old['isVisibleToPartner'] ?? 1,
+      'type': old['type'] ?? 'general',
+      'currency': old['currency'] ?? 'VND',
+      'isArchived': old['isArchived'] ?? 0,
+      'sync_status': old['syncStatus'] ?? old['sync_status'] ?? 0,
+      'created_at':
+          old['createdAt'] ??
+          old['created_at'] ??
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      'updated_at':
+          old['updatedAt'] ??
+          old['updated_at'] ??
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+    };
+  }
 
-  /// Handle budget conflicts
-  Future<Budget?> resolveBudgetConflict(
-    Budget localBudget,
-    Budget remoteBudget,
-  ) async {
-    // Simple last-write-wins strategy
-    // In production, you might want more sophisticated conflict resolution
-    if (remoteBudget.version > localBudget.version) {
-      await saveBudgetWithOwnership(remoteBudget, syncStatus: 1);
-      return remoteBudget;
-    } else if (localBudget.version > remoteBudget.version) {
-      // Local is newer, mark for sync
-      await updateBudgetWithOwnership(localBudget);
-      return localBudget;
-    } else {
-      // Same version, check timestamp
-      final localTime =
-          localBudget.updatedAt ?? localBudget.createdAt ?? DateTime.now();
-      final remoteTime =
-          remoteBudget.updatedAt ?? remoteBudget.createdAt ?? DateTime.now();
+  Map<String, dynamic> _migrateCategoryData(Map<String, dynamic> old) {
+    return {
+      'id': old['id'],
+      'name': old['name'],
+      'ownerId': old['ownerId'],
+      'type': old['type'],
+      'iconCodePoint': old['iconCodePoint'],
+      'subCategories': old['subCategories'] ?? '{}',
+      'ownershipType': old['ownershipType'] ?? 'personal',
+      'createdBy': old['createdBy'],
+      'isArchived': old['isArchived'] ?? 0,
+      'isActive': old['isActive'] ?? 1,
+      'usageCount': old['usageCount'] ?? 0,
+      'sync_status': old['syncStatus'] ?? old['sync_status'] ?? 0,
+      'created_at':
+          old['createdAt'] ??
+          old['created_at'] ??
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      'updated_at':
+          old['updatedAt'] ??
+          old['updated_at'] ??
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+    };
+  }
 
-      final winner = remoteTime.isAfter(localTime) ? remoteBudget : localBudget;
-      await saveBudgetWithOwnership(winner, syncStatus: 1);
-      return winner;
+  Map<String, dynamic> _migrateBudgetData(Map<String, dynamic> old) {
+    return {
+      'id': old['id'],
+      'ownerId': old['ownerId'],
+      'month': old['month'],
+      'totalAmount': old['totalAmount'],
+      'categoryAmounts': old['categoryAmounts'] ?? '{}',
+      'budgetType': old['budgetType'] ?? 'personal',
+      'period': old['period'] ?? 'monthly',
+      'createdBy': old['createdBy'],
+      'isActive': old['isActive'] ?? 1,
+      'notes': old['notes'] ?? '{}',
+      'categoryLimits': old['categoryLimits'] ?? '{}',
+      'sync_status': old['syncStatus'] ?? old['sync_status'] ?? 0,
+      'created_at':
+          old['createdAt'] ??
+          old['created_at'] ??
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      'updated_at':
+          old['updatedAt'] ??
+          old['updated_at'] ??
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+    };
+  }
+
+  Map<String, dynamic> _migrateDescriptionData(Map<String, dynamic> old) {
+    return {
+      'userId': old['userId'],
+      'description': old['description'],
+      'usageCount': old['usageCount'] ?? 1,
+      'lastUsed':
+          old['lastUsed'] ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      'createdAt':
+          old['createdAt'] ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      'updatedAt':
+          old['updatedAt'] ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      'type': old['type'],
+      'categoryId': old['categoryId'],
+      'amount': old['amount'],
+    };
+  }
+
+  // ============ EMERGENCY RESET ============
+
+  Future<void> _emergencyReset() async {
+    try {
+      print('🚨 Performing emergency database reset...');
+
+      if (_database != null) {
+        await _database!.close();
+        _database = null;
+      }
+
+      String path = join(await getDatabasesPath(), _databaseName);
+      await deleteDatabase(path);
+
+      print('✅ Emergency reset completed');
+    } catch (e) {
+      print('❌ Emergency reset failed: $e');
+      rethrow;
     }
   }
 
-  /// Handle category conflicts
-  Future<Category?> resolveCategoryConflict(
-    Category localCategory,
-    Category remoteCategory,
-  ) async {
-    // Similar conflict resolution for categories
-    if (remoteCategory.version > localCategory.version) {
-      await saveCategoryWithOwnership(remoteCategory, syncStatus: 1);
-      return remoteCategory;
-    } else if (localCategory.version > remoteCategory.version) {
-      await saveCategoryWithOwnership(localCategory, syncStatus: 0);
-      return localCategory;
-    } else {
-      final localTime =
-          localCategory.updatedAt ?? localCategory.createdAt ?? DateTime.now();
-      final remoteTime =
-          remoteCategory.updatedAt ??
-          remoteCategory.createdAt ??
-          DateTime.now();
+  /// Emergency reset - can be called externally
+  static Future<void> emergencyDatabaseReset() async {
+    final instance = EnhancedLocalDatabaseService();
+    await instance._emergencyReset();
+  }
 
-      final winner = remoteTime.isAfter(localTime)
-          ? remoteCategory
-          : localCategory;
-      await saveCategoryWithOwnership(winner, syncStatus: 1);
-      return winner;
+  /// Check if database is healthy
+  Future<bool> isDatabaseHealthy() async {
+    try {
+      final db = await database;
+
+      // Test basic query
+      await db.rawQuery('SELECT sqlite_version()');
+
+      // Check critical tables exist
+      final tables = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table'",
+      );
+
+      final tableNames = tables.map((t) => t['name'] as String).toSet();
+      final requiredTables = {
+        'transactions',
+        'wallets',
+        'categories',
+        'budgets',
+        'description_history',
+        'sync_queue',
+        'users',
+      };
+
+      final hasAllTables = requiredTables.every(
+        (table) => tableNames.contains(table),
+      );
+
+      if (!hasAllTables) {
+        print(
+          '❌ Missing required tables: ${requiredTables.difference(tableNames)}',
+        );
+        return false;
+      }
+
+      print('✅ Database health check passed');
+      return true;
+    } catch (e) {
+      print('❌ Database health check failed: $e');
+      return false;
     }
   }
 
-  // ============ DATA MIGRATION ============
+  // ============ CRUD OPERATIONS ============
+  // All CRUD operations will be implemented here...
+  // This is the foundation - specific operations will be added in next step
 
-  /// Migrate from old category structure to enhanced
-  Future<void> migrateToEnhancedCategories() async {
+  Future<void> close() async {
+    if (_database != null) {
+      await _database!.close();
+      _database = null;
+    }
+  }
+
+  /// Get database statistics
+  Future<Map<String, int>> getDatabaseStats() async {
     final db = await database;
 
     try {
-      // Check if migration is needed
-      final oldCategories = await db.query('categories');
-      if (oldCategories.isEmpty) return;
+      final results = await Future.wait([
+        db.rawQuery('SELECT COUNT(*) as count FROM transactions'),
+        db.rawQuery('SELECT COUNT(*) as count FROM wallets'),
+        db.rawQuery('SELECT COUNT(*) as count FROM categories'),
+        db.rawQuery('SELECT COUNT(*) as count FROM budgets'),
+        db.rawQuery('SELECT COUNT(*) as count FROM description_history'),
+        db.rawQuery('SELECT COUNT(*) as count FROM sync_queue'),
+        db.rawQuery(
+          'SELECT COUNT(*) as count FROM sync_queue WHERE retry_count = 0',
+        ),
+      ]);
 
-      print(
-        '🔄 Migrating ${oldCategories.length} categories to enhanced structure...',
-      );
-
-      for (final oldCategory in oldCategories) {
-        final enhancedCategory = Category(
-          id: oldCategory['id'] as String,
-          name: oldCategory['name'] as String,
-          ownerId: oldCategory['ownerId'] as String,
-          type: oldCategory['type'] as String,
-          iconCodePoint: oldCategory['iconCodePoint'] as int?,
-          subCategories: oldCategory['subCategories'] != null
-              ? Map<String, String>.from(
-                  jsonDecode(oldCategory['subCategories'] as String),
-                )
-              : {},
-          ownershipType: CategoryOwnershipType.personal, // Default to personal
-          createdAt: DateTime.fromMillisecondsSinceEpoch(
-            oldCategory['createdAt'] as int? ??
-                DateTime.now().millisecondsSinceEpoch,
-          ),
-          updatedAt: DateTime.fromMillisecondsSinceEpoch(
-            oldCategory['updatedAt'] as int? ??
-                DateTime.now().millisecondsSinceEpoch,
-          ),
-        );
-
-        await saveCategoryWithOwnership(enhancedCategory, syncStatus: 1);
-      }
-
-      print('✅ Category migration completed');
+      return {
+        'transactions': results[0].first['count'] as int,
+        'wallets': results[1].first['count'] as int,
+        'categories': results[2].first['count'] as int,
+        'budgets': results[3].first['count'] as int,
+        'descriptions': results[4].first['count'] as int,
+        'pendingSync': results[5].first['count'] as int,
+        'failedSync': results[6].first['count'] as int,
+      };
     } catch (e) {
-      print('❌ Category migration failed: $e');
+      print('❌ Error getting database stats: $e');
+      return {
+        'transactions': 0,
+        'wallets': 0,
+        'categories': 0,
+        'budgets': 0,
+        'descriptions': 0,
+        'pendingSync': 0,
+        'failedSync': 0,
+      };
     }
   }
 
-  /// Migrate from old budget structure to enhanced
-  Future<void> migrateToEnhancedBudgets() async {
+  /// Optimize database performance
+  Future<void> optimizeDatabase() async {
     final db = await database;
 
     try {
-      // Check if migration is needed
-      final oldBudgets = await db.query('budgets');
-      if (oldBudgets.isEmpty) return;
+      print('🔧 Optimizing database...');
 
-      print(
-        '🔄 Migrating ${oldBudgets.length} budgets to enhanced structure...',
-      );
+      // Analyze tables for better query performance
+      await db.execute('ANALYZE');
 
-      for (final oldBudget in oldBudgets) {
-        final enhancedBudget = Budget(
-          id: oldBudget['id'] as String,
-          ownerId: oldBudget['ownerId'] as String,
-          month: oldBudget['month'] as String,
-          totalAmount: (oldBudget['totalAmount'] as num).toDouble(),
-          categoryAmounts: oldBudget['categoryAmounts'] != null
-              ? Map<String, double>.from(
-                  jsonDecode(oldBudget['categoryAmounts'] as String),
-                )
-              : {},
-          budgetType: BudgetType.personal, // Default to personal
-          createdBy: oldBudget['createdBy'] as String?,
-          createdAt: oldBudget['createdAt'] != null
-              ? DateTime.fromMillisecondsSinceEpoch(
-                  oldBudget['createdAt'] as int,
-                )
-              : null,
-          updatedAt: oldBudget['updatedAt'] != null
-              ? DateTime.fromMillisecondsSinceEpoch(
-                  oldBudget['updatedAt'] as int,
-                )
-              : null,
-          isActive: (oldBudget['isActive'] as int? ?? 1) == 1,
-        );
+      // Vacuum to reclaim space
+      await db.execute('VACUUM');
 
-        await saveBudgetWithOwnership(enhancedBudget, syncStatus: 1);
-      }
+      // Update statistics
+      await db.execute('PRAGMA optimize');
 
-      print('✅ Budget migration completed');
+      print('✅ Database optimization completed');
     } catch (e) {
-      print('❌ Budget migration failed: $e');
+      print('❌ Database optimization failed: $e');
     }
   }
 
-  // ============ HELPER METHODS ============
-
-  Budget _budgetFromMap(Map<String, dynamic> map) {
-    return Budget(
-      id: map['id'],
-      ownerId: map['ownerId'],
-      month: map['month'],
-      totalAmount: (map['totalAmount'] as num).toDouble(),
-      categoryAmounts: map['categoryAmounts'] != null
-          ? Map<String, double>.from(jsonDecode(map['categoryAmounts']))
-          : {},
-      budgetType: BudgetType.values.firstWhere(
-        (e) => e.name == (map['budgetType'] ?? 'personal'),
-        orElse: () => BudgetType.personal,
-      ),
-      period: BudgetPeriod.values.firstWhere(
-        (e) => e.name == (map['period'] ?? 'monthly'),
-        orElse: () => BudgetPeriod.monthly,
-      ),
-      createdBy: map['createdBy'],
-      createdAt: map['createdAt'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['createdAt'])
-          : null,
-      updatedAt: map['updatedAt'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['updatedAt'])
-          : null,
-      startDate: map['startDate'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['startDate'])
-          : null,
-      endDate: map['endDate'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['endDate'])
-          : null,
-      isActive: (map['isActive'] ?? 1) == 1,
-      notes: map['notes'] != null
-          ? Map<String, String>.from(jsonDecode(map['notes']))
-          : null,
-      categoryLimits: map['categoryLimits'] != null
-          ? Map<String, double>.from(jsonDecode(map['categoryLimits']))
-          : null,
-      version: map['version'] ?? 1,
-      isDeleted: (map['isDeleted'] ?? 0) == 1,
-    );
-  }
-
-  Category _categoryFromMap(Map<String, dynamic> map) {
-    return Category(
-      id: map['id'],
-      name: map['name'],
-      ownerId: map['ownerId'],
-      type: map['type'],
-      iconCodePoint: map['iconCodePoint'],
-      subCategories: map['subCategories'] != null
-          ? Map<String, String>.from(jsonDecode(map['subCategories']))
-          : {},
-      ownershipType: CategoryOwnershipType.values.firstWhere(
-        (e) => e.name == (map['ownershipType'] ?? 'personal'),
-        orElse: () => CategoryOwnershipType.personal,
-      ),
-      createdBy: map['createdBy'],
-      createdAt: map['createdAt'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['createdAt'])
-          : null,
-      updatedAt: map['updatedAt'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['updatedAt'])
-          : null,
-      isArchived: (map['isArchived'] ?? 0) == 1,
-      isActive: (map['isActive'] ?? 1) == 1,
-      usageCount: map['usageCount'] ?? 0,
-      lastUsed: map['lastUsed'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['lastUsed'])
-          : null,
-      version: map['version'] ?? 1,
-      metadata: map['metadata'] != null
-          ? Map<String, dynamic>.from(jsonDecode(map['metadata']))
-          : null,
-    );
-  }
-
-  // ============ CLEANUP METHODS ============
-
-  /// Clean up old synced data to save space
-  Future<void> cleanupOldSyncedData({int keepDays = 30}) async {
+  /// Clean up old synced data
+  Future<void> cleanupOldData({int keepDays = 30}) async {
     final db = await database;
     final cutoffTime =
         DateTime.now()
@@ -882,36 +724,32 @@ extension EnhancedLocalDatabase on LocalDatabaseService {
         1000;
 
     try {
-      // Clean up old synced budgets
-      await db.delete(
-        'enhanced_budgets',
-        where: 'syncStatus = 1 AND isDeleted = 1 AND lastModified < ?',
-        whereArgs: [cutoffTime],
-      );
+      await db.transaction((txn) async {
+        // Clean up old change logs
+        await txn.delete(
+          'change_log',
+          where: 'created_at < ?',
+          whereArgs: [cutoffTime],
+        );
 
-      // Clean up old synced categories
-      await db.delete(
-        'enhanced_categories',
-        where: 'syncStatus = 1 AND isArchived = 1 AND lastModified < ?',
-        whereArgs: [cutoffTime],
-      );
+        // Clean up successful sync queue items
+        await txn.delete(
+          'sync_queue',
+          where: 'created_at < ? AND retry_count = 0',
+          whereArgs: [cutoffTime],
+        );
 
-      print('✅ Cleanup completed');
+        // Clean up old description history (keep frequently used ones)
+        await txn.delete(
+          'description_history',
+          where: 'lastUsed < ? AND usageCount <= 1',
+          whereArgs: [cutoffTime],
+        );
+      });
+
+      print('✅ Old data cleanup completed');
     } catch (e) {
       print('❌ Cleanup failed: $e');
-    }
-  }
-
-  /// Vacuum database to reclaim space
-  Future<void> optimizeDatabase() async {
-    final db = await database;
-
-    try {
-      await db.execute('ANALYZE');
-      await db.execute('VACUUM');
-      print('✅ Database optimized');
-    } catch (e) {
-      print('❌ Database optimization failed: $e');
     }
   }
 }
