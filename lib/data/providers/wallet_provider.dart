@@ -1,0 +1,230 @@
+import 'package:flutter/foundation.dart';
+import 'package:moneysun/data/models/wallet_model.dart';
+import 'package:moneysun/data/services/data_service.dart'; // ✅ Updated import
+import 'package:moneysun/data/providers/user_provider.dart';
+
+class WalletProvider extends ChangeNotifier {
+  final DataService _dataService; // ✅ Using unified service
+  final UserProvider _userProvider;
+
+  WalletProvider(this._dataService, this._userProvider) {
+    _dataService.addListener(_onDataServiceChanged);
+  }
+
+  // ============ STATE MANAGEMENT ============
+  List<Wallet> _wallets = [];
+  List<Wallet> _filteredWallets = [];
+  bool _isLoading = false;
+  String? _error;
+  bool _includeArchived = false;
+  bool _showOnlyVisible = false;
+
+  // ============ GETTERS ============
+  List<Wallet> get wallets => _filteredWallets;
+  List<Wallet> get allWallets => _wallets;
+  List<Wallet> get activeWallets =>
+      _wallets.where((w) => !w.isArchived).toList();
+
+  List<Wallet> get personalWallets => activeWallets
+      .where((w) => w.ownerId == _userProvider.currentUser?.uid)
+      .toList();
+
+  List<Wallet> get sharedWallets => activeWallets
+      .where((w) => w.ownerId == _userProvider.partnershipId)
+      .toList();
+
+  List<Wallet> get partnerWallets => activeWallets
+      .where(
+        (w) => w.ownerId == _userProvider.partnerUid && w.isVisibleToPartner,
+      )
+      .toList();
+
+  bool get isLoading => _isLoading;
+  String? get error => _error;
+  bool get hasError => _error != null;
+  int get walletCount => _filteredWallets.length;
+  bool get includeArchived => _includeArchived;
+  bool get showOnlyVisible => _showOnlyVisible;
+
+  // Financial overview
+  double get totalBalance =>
+      _filteredWallets.fold(0, (sum, w) => sum + w.balance);
+  double get personalBalance =>
+      personalWallets.fold(0, (sum, w) => sum + w.balance);
+  double get sharedBalance =>
+      sharedWallets.fold(0, (sum, w) => sum + w.balance);
+
+  // ============ PUBLIC METHODS ============
+
+  /// Load all wallets - uses offline-first unified service
+  Future<void> loadWallets({bool forceRefresh = false}) async {
+    if (_isLoading && !forceRefresh) return;
+
+    _setLoading(true);
+    _clearError();
+
+    try {
+      debugPrint('📂 Loading wallets from unified service...');
+
+      final loadedWallets = await _dataService.getWallets(
+        includeArchived: _includeArchived,
+      );
+
+      _wallets = loadedWallets;
+      _applyCurrentFilters();
+
+      debugPrint('✅ Loaded ${_wallets.length} wallets');
+    } catch (e) {
+      _setError('Không thể tải ví: $e');
+      debugPrint('❌ Error loading wallets: $e');
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  /// Add new wallet - optimistic UI with offline support
+  Future<bool> addWallet({
+    required String name,
+    required double initialBalance,
+    WalletType type = WalletType.general,
+    bool isVisibleToPartner = true,
+    String? ownerId,
+  }) async {
+    _clearError();
+
+    try {
+      debugPrint('➕ Adding wallet: $name');
+
+      await _dataService.addWallet(
+        name: name,
+        initialBalance: initialBalance,
+        type: type,
+        isVisibleToPartner: isVisibleToPartner,
+        ownerId: ownerId,
+      );
+
+      // Reload wallets to get the new one
+      await loadWallets(forceRefresh: true);
+
+      debugPrint('✅ Wallet added successfully');
+      return true;
+    } catch (e) {
+      _setError('Không thể thêm ví: $e');
+      debugPrint('❌ Error adding wallet: $e');
+      return false;
+    }
+  }
+
+  /// Get wallet by ID
+  Wallet? getWalletById(String walletId) {
+    try {
+      return _wallets.firstWhere((w) => w.id == walletId);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Get wallets suitable for transaction source
+  List<Wallet> getTransactionSourceWallets() {
+    return activeWallets.where((w) => canEditWallet(w)).toList();
+  }
+
+  /// Get wallets suitable for transfer destination
+  List<Wallet> getTransferDestinationWallets(String sourceWalletId) {
+    return activeWallets
+        .where((w) => w.id != sourceWalletId && canEditWallet(w))
+        .toList();
+  }
+
+  /// Check if wallet can be edited by current user
+  bool canEditWallet(Wallet wallet) {
+    final currentUserId = _userProvider.currentUser?.uid;
+
+    // Personal wallets: only owner can edit
+    if (wallet.ownerId == currentUserId) return true;
+
+    // Shared wallets: both partners can edit
+    if (wallet.isShared && _userProvider.partnershipId != null) {
+      return wallet.ownerId == _userProvider.partnershipId;
+    }
+
+    return false;
+  }
+
+  /// Search wallets
+  List<Wallet> searchWallets(String query) {
+    if (query.trim().isEmpty) return _filteredWallets;
+
+    final lowercaseQuery = query.toLowerCase().trim();
+    return _filteredWallets.where((wallet) {
+      return wallet.name.toLowerCase().contains(lowercaseQuery);
+    }).toList();
+  }
+
+  /// Toggle include archived
+  void toggleIncludeArchived() {
+    _includeArchived = !_includeArchived;
+    loadWallets(forceRefresh: true);
+    debugPrint('📦 Include archived wallets toggled: $_includeArchived');
+  }
+
+  // ============ PRIVATE METHODS ============
+
+  void _onDataServiceChanged() {
+    if (!_isLoading) {
+      loadWallets(forceRefresh: true);
+    }
+  }
+
+  void _applyCurrentFilters() {
+    _filteredWallets = _wallets.where((wallet) {
+      // Archive filter
+      if (!_includeArchived && wallet.isArchived) return false;
+
+      // Visibility filter
+      if (_showOnlyVisible && !wallet.isVisibleToPartner) return false;
+
+      return true;
+    }).toList();
+
+    // Sort wallets
+    _filteredWallets.sort((a, b) {
+      // Archived wallets go to bottom
+      if (a.isArchived != b.isArchived) {
+        return a.isArchived ? 1 : -1;
+      }
+
+      // Then by balance descending
+      final balanceComparison = b.balance.compareTo(a.balance);
+      if (balanceComparison != 0) return balanceComparison;
+
+      // Finally by name
+      return a.name.compareTo(b.name);
+    });
+  }
+
+  void _setLoading(bool loading) {
+    if (_isLoading != loading) {
+      _isLoading = loading;
+      notifyListeners();
+    }
+  }
+
+  void _setError(String error) {
+    _error = error;
+    notifyListeners();
+  }
+
+  void _clearError() {
+    if (_error != null) {
+      _error = null;
+      notifyListeners();
+    }
+  }
+
+  @override
+  void dispose() {
+    _dataService.removeListener(_onDataServiceChanged);
+    super.dispose();
+  }
+}

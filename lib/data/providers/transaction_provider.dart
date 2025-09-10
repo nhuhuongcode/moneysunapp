@@ -1,14 +1,13 @@
 import 'package:flutter/foundation.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
-import 'package:moneysun/data/services/data_service.dart';
+import 'package:moneysun/data/services/data_service.dart'; // ✅ Updated import
 import 'package:moneysun/data/providers/user_provider.dart';
 
 class TransactionProvider extends ChangeNotifier {
-  final DataService _dataService;
+  final DataService _dataService; // ✅ Using unified service
   final UserProvider _userProvider;
 
   TransactionProvider(this._dataService, this._userProvider) {
-    // Listen to data service changes for auto-refresh
     _dataService.addListener(_onDataServiceChanged);
   }
 
@@ -43,7 +42,7 @@ class TransactionProvider extends ChangeNotifier {
 
   // ============ PUBLIC METHODS ============
 
-  /// Load transactions with optional filters
+  /// Load transactions - uses offline-first unified service
   Future<void> loadTransactions({
     DateTime? startDate,
     DateTime? endDate,
@@ -58,7 +57,7 @@ class TransactionProvider extends ChangeNotifier {
     _clearError();
 
     try {
-      debugPrint('📊 Loading transactions with filters...');
+      debugPrint('📊 Loading transactions from unified service...');
 
       final loadedTransactions = await _dataService.getTransactions(
         startDate: startDate,
@@ -80,7 +79,7 @@ class TransactionProvider extends ChangeNotifier {
     }
   }
 
-  /// Add new transaction
+  /// Add new transaction - optimistic UI with offline support
   Future<bool> addTransaction(TransactionModel transaction) async {
     _clearError();
 
@@ -99,63 +98,6 @@ class TransactionProvider extends ChangeNotifier {
     } catch (e) {
       _setError('Không thể thêm giao dịch: $e');
       debugPrint('❌ Error adding transaction: $e');
-      return false;
-    }
-  }
-
-  /// Update existing transaction
-  Future<bool> updateTransaction(
-    TransactionModel updatedTransaction,
-    TransactionModel? originalTransaction,
-  ) async {
-    _clearError();
-
-    try {
-      debugPrint('🔄 Updating transaction: ${updatedTransaction.id}');
-
-      await _dataService.updateTransaction(
-        updatedTransaction,
-        originalTransaction,
-      );
-
-      // Optimistic update - update local list
-      final index = _transactions.indexWhere(
-        (t) => t.id == updatedTransaction.id,
-      );
-      if (index != -1) {
-        _transactions[index] = updatedTransaction;
-        _applyCurrentFilters();
-        notifyListeners();
-      }
-
-      debugPrint('✅ Transaction updated successfully');
-      return true;
-    } catch (e) {
-      _setError('Không thể cập nhật giao dịch: $e');
-      debugPrint('❌ Error updating transaction: $e');
-      return false;
-    }
-  }
-
-  /// Delete transaction
-  Future<bool> deleteTransaction(TransactionModel transaction) async {
-    _clearError();
-
-    try {
-      debugPrint('🗑️ Deleting transaction: ${transaction.id}');
-
-      await _dataService.deleteTransaction(transaction);
-
-      // Optimistic update - remove from local list
-      _transactions.removeWhere((t) => t.id == transaction.id);
-      _applyCurrentFilters();
-      notifyListeners();
-
-      debugPrint('✅ Transaction deleted successfully');
-      return true;
-    } catch (e) {
-      _setError('Không thể xóa giao dịch: $e');
-      debugPrint('❌ Error deleting transaction: $e');
       return false;
     }
   }
@@ -194,14 +136,6 @@ class TransactionProvider extends ChangeNotifier {
     _applyCurrentFilters();
     notifyListeners();
     debugPrint('🧹 All filters cleared');
-  }
-
-  /// Get transactions for specific month
-  Future<void> loadTransactionsForMonth(DateTime month) async {
-    final startDate = DateTime(month.year, month.month, 1);
-    final endDate = DateTime(month.year, month.month + 1, 0, 23, 59, 59);
-
-    await loadTransactions(startDate: startDate, endDate: endDate);
   }
 
   /// Get recent transactions (last 30 days)
@@ -273,7 +207,6 @@ class TransactionProvider extends ChangeNotifier {
   // ============ PRIVATE METHODS ============
 
   void _onDataServiceChanged() {
-    // Auto-refresh when data service notifies changes
     if (!_isLoading) {
       loadTransactions(forceRefresh: true);
     }

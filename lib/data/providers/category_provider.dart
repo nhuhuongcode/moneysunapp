@@ -1,10 +1,10 @@
 import 'package:flutter/foundation.dart' hide Category;
 import 'package:moneysun/data/models/category_model.dart';
-import 'package:moneysun/data/services/data_service.dart';
+import 'package:moneysun/data/services/data_service.dart'; // ✅ Updated import
 import 'package:moneysun/data/providers/user_provider.dart';
 
 class CategoryProvider extends ChangeNotifier {
-  final DataService _dataService;
+  final DataService _dataService; // ✅ Using unified service
   final UserProvider _userProvider;
 
   CategoryProvider(this._dataService, this._userProvider) {
@@ -22,12 +22,10 @@ class CategoryProvider extends ChangeNotifier {
   List<Category> get activeCategories =>
       _categories.where((c) => !c.isArchived).toList();
 
-  List<Category> get incomeCategories => activeCategories
-      .where((c) => c.type == CategoryType.income.name)
-      .toList();
-  List<Category> get expenseCategories => activeCategories
-      .where((c) => c.type == CategoryType.expense.name)
-      .toList();
+  List<Category> get incomeCategories =>
+      activeCategories.where((c) => c.type == 'income').toList();
+  List<Category> get expenseCategories =>
+      activeCategories.where((c) => c.type == 'expense').toList();
 
   List<Category> get personalCategories => activeCategories
       .where((c) => c.ownershipType == CategoryOwnershipType.personal)
@@ -43,7 +41,7 @@ class CategoryProvider extends ChangeNotifier {
 
   // ============ PUBLIC METHODS ============
 
-  /// Load all categories
+  /// Load all categories - uses offline-first unified service
   Future<void> loadCategories({bool forceRefresh = false}) async {
     if (_isLoading && !forceRefresh) return;
 
@@ -51,7 +49,7 @@ class CategoryProvider extends ChangeNotifier {
     _clearError();
 
     try {
-      debugPrint('📂 Loading categories...');
+      debugPrint('📂 Loading categories from unified service...');
 
       final loadedCategories = await _dataService.getCategories(
         includeArchived: _includeArchived,
@@ -67,72 +65,6 @@ class CategoryProvider extends ChangeNotifier {
     } finally {
       _setLoading(false);
     }
-  }
-
-  /// Add new category
-  Future<bool> addCategory({
-    required String name,
-    required String type,
-    required CategoryOwnershipType ownershipType,
-    int? iconCodePoint,
-    Map<String, String>? subCategories,
-  }) async {
-    _clearError();
-
-    try {
-      debugPrint('➕ Adding category: $name ($ownershipType)');
-
-      await _dataService.addCategory(
-        name: name,
-        type: type,
-        ownershipType: ownershipType,
-        iconCodePoint: iconCodePoint,
-        subCategories: subCategories,
-      );
-
-      // Reload categories to get the new one
-      await loadCategories(forceRefresh: true);
-
-      debugPrint('✅ Category added successfully');
-      return true;
-    } catch (e) {
-      _setError('Không thể thêm danh mục: $e');
-      debugPrint('❌ Error adding category: $e');
-      return false;
-    }
-  }
-
-  /// Update category
-  Future<bool> updateCategory(Category updatedCategory) async {
-    _clearError();
-
-    try {
-      debugPrint('🔄 Updating category: ${updatedCategory.name}');
-
-      // Note: Will implement updateCategory in UnifiedDataService
-      // await _dataService.updateCategory(updatedCategory);
-
-      // Optimistic update
-      final index = _categories.indexWhere((c) => c.id == updatedCategory.id);
-      if (index != -1) {
-        _categories[index] = updatedCategory;
-        _sortCategories();
-        notifyListeners();
-      }
-
-      debugPrint('✅ Category updated successfully');
-      return true;
-    } catch (e) {
-      _setError('Không thể cập nhật danh mục: $e');
-      debugPrint('❌ Error updating category: $e');
-      return false;
-    }
-  }
-
-  /// Archive/unarchive category
-  Future<bool> toggleCategoryArchiveStatus(Category category) async {
-    final updatedCategory = category.copyWith(isArchived: !category.isArchived);
-    return await updateCategory(updatedCategory);
   }
 
   /// Get categories by type
@@ -157,13 +89,6 @@ class CategoryProvider extends ChangeNotifier {
     return activeCategories.where((category) {
       return category.name.toLowerCase().contains(lowercaseQuery);
     }).toList();
-  }
-
-  /// Get popular categories (by usage)
-  List<Category> getPopularCategories({int limit = 10}) {
-    final sorted = List<Category>.from(activeCategories);
-    sorted.sort((a, b) => b.usageCount.compareTo(a.usageCount));
-    return sorted.take(limit).toList();
   }
 
   /// Check if category can be edited
