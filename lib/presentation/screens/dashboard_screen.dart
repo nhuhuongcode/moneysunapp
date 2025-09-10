@@ -1,21 +1,22 @@
 import 'dart:math';
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/services/auth_service.dart';
-import 'package:moneysun/data/services/database_service.dart';
+import 'package:moneysun/data/services/data_service.dart';
 import 'package:moneysun/presentation/screens/add_transaction_screen.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/presentation/screens/all_transactions_screen.dart';
-import 'package:moneysun/presentation/screens/transfer_screen.dart';
 import 'package:moneysun/presentation/widgets/summary_card.dart';
 import 'package:provider/provider.dart';
-import 'package:collection/collection.dart'; // Thêm package collection
+import 'package:collection/collection.dart';
 import 'package:moneysun/presentation/widgets/daily_transactions_group.dart';
 import 'package:moneysun/presentation/widgets/time_filter_appbar_widget.dart';
+import 'package:moneysun/data/providers/wallet_provider.dart';
+import 'package:moneysun/data/providers/transaction_provider.dart';
+import 'package:moneysun/data/providers/connection_status_provider.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -25,7 +26,6 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  final DatabaseService _databaseService = DatabaseService();
   final AuthService _authService = AuthService();
 
   Key _refreshKey = UniqueKey();
@@ -39,37 +39,67 @@ class _DashboardScreenState extends State<DashboardScreen> {
     0,
   );
 
+  @override
+  void initState() {
+    super.initState();
+    _loadDataWithDataService();
+  }
+
+  Future<void> _loadDataWithDataService() async {
+    // Load data using  providers
+    try {
+      final walletProvider = Provider.of<WalletProvider>(
+        context,
+        listen: false,
+      );
+      final transactionProvider = Provider.of<TransactionProvider>(
+        context,
+        listen: false,
+      );
+
+      await Future.wait([
+        walletProvider.loadWallets(),
+        transactionProvider.loadTransactions(
+          startDate: _startDate,
+          endDate: _endDate,
+        ),
+      ]);
+
+      debugPrint('✅ Dashboard data loaded with DataService');
+    } catch (e) {
+      debugPrint('❌ Error loading dashboard data with DataService: $e');
+    }
+  }
+
   Future<void> _navigateToAddTransaction() async {
     final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (context) => const AddTransactionScreen()),
     );
 
-    // FIX: Reload data if transaction was added
+    // Reload data if transaction was added
     if (result == true) {
+      await _loadDataWithDataService();
       setState(() {
         _refreshKey = UniqueKey(); // Force rebuild
       });
     }
   }
 
-  // Hàm để hiển thị dialog thêm ví
   void _showAddWalletDialog() {
     final userProvider = Provider.of<UserProvider>(context, listen: false);
     final nameController = TextEditingController();
     final balanceController = TextEditingController();
 
-    // Biến để lưu lựa chọn của người dùng (cá nhân hay chung)
     String ownerType = 'personal';
 
     showDialog(
       context: context,
       builder: (context) {
-        // Sử dụng StatefulBuilder để dialog có thể tự cập nhật state bên trong nó
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Thêm ví mới'),
+              title: const Text('Thêm ví mới (DataService)'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -85,7 +115,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     keyboardType: TextInputType.number,
                   ),
-                  // Chỉ hiển thị lựa chọn này nếu user đã có partner
                   if (userProvider.partnershipId != null) ...[
                     const SizedBox(height: 16),
                     const Text(
@@ -115,12 +144,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: const Text('Hủy'),
                 ),
                 ElevatedButton(
-                  onPressed: () {
+                  onPressed: () async {
                     final name = nameController.text;
                     final balance =
                         double.tryParse(balanceController.text) ?? 0.0;
 
-                    // Xác định ownerId dựa trên lựa chọn
                     final String ownerId;
                     if (ownerType == 'shared') {
                       ownerId = userProvider.partnershipId!;
@@ -129,8 +157,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     }
 
                     if (name.isNotEmpty) {
-                      _databaseService.addWallet(name, balance, ownerId);
+                      final walletProvider = Provider.of<WalletProvider>(
+                        context,
+                        listen: false,
+                      );
+
+                      final success = await walletProvider.addWallet(
+                        name: name,
+                        initialBalance: balance,
+                        ownerId: ownerId,
+                      );
+
                       Navigator.pop(context);
+
+                      if (success) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Ví đã được thêm thành công với DataService',
+                            ),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Không thể thêm ví. Vui lòng thử lại.',
+                            ),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
                     }
                   },
                   child: const Text('Thêm'),
@@ -145,162 +203,268 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Dùng để định dạng tiền tệ
     final currencyFormatter = NumberFormat.currency(
       locale: 'vi_VN',
       symbol: '₫',
     );
 
-    return Scaffold(
-      appBar: TimeFilterAppBar(
-        title: 'Tổng quan',
-        selectedFilter: _selectedTimeFilter,
-        startDate: _startDate,
-        endDate: _endDate,
-        onFilterChanged: (filter, start, end) {
-          setState(() {
-            _selectedTimeFilter = filter;
-            _startDate = start;
-            _endDate = end;
-          });
-        },
-      ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          // Cập nhật lại dữ liệu khi kéo để làm mới
-          setState(() {
-            _refreshKey = UniqueKey(); // Force rebuild
-          });
-        },
-        child: SingleChildScrollView(
-          key: _refreshKey,
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SummaryCard(
-                initialStartDate: _startDate,
-                initialEndDate: _endDate,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Các ví của bạn',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              _buildWalletsList(currencyFormatter),
-              const SizedBox(height: 24),
+    return Consumer<ConnectionStatusProvider>(
+      builder: (context, connectionStatus, child) {
+        return Scaffold(
+          appBar: TimeFilterAppBar(
+            title: 'Tổng quan (DataService)',
+            selectedFilter: _selectedTimeFilter,
+            startDate: _startDate,
+            endDate: _endDate,
+            onFilterChanged: (filter, start, end) {
+              setState(() {
+                _selectedTimeFilter = filter;
+                _startDate = start;
+                _endDate = end;
+              });
+              // Reload transactions with new date range
+              final transactionProvider = Provider.of<TransactionProvider>(
+                context,
+                listen: false,
+              );
+              transactionProvider.loadTransactions(
+                startDate: start,
+                endDate: end,
+              );
+            },
+            // Add sync status info
+            syncStatus: SyncStatusInfo(
+              status: connectionStatus.isOnline
+                  ? ConnectivityStatus.online
+                  : ConnectivityStatus.offline,
+              lastSyncTime: connectionStatus.lastSyncTime,
+              pendingCount: connectionStatus.pendingItems,
+              errorMessage: connectionStatus.lastError,
+              isSyncing: connectionStatus.isSyncing,
+            ),
+            onSyncPressed: () async {
+              // Manual sync trigger
+              try {
+                final dataService = Provider.of<DataService>(
+                  context,
+                  listen: false,
+                );
+                await dataService.forceSyncNow();
 
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Đồng bộ thành công'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Đồng bộ thất bại: $e'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            },
+          ),
+          body: RefreshIndicator(
+            onRefresh: () async {
+              await _loadDataWithDataService();
+              setState(() {
+                _refreshKey = UniqueKey();
+              });
+            },
+            child: SingleChildScrollView(
+              key: _refreshKey,
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Giao dịch gần đây',
-                    style: Theme.of(context).textTheme.titleLarge,
+                  //  Summary Card with DataService
+                  SummaryCard(
+                    initialStartDate: _startDate,
+                    initialEndDate: _endDate,
                   ),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const AllTransactionsScreen(),
-                        ),
-                      );
-                    },
-                    child: const Text('Xem tất cả'),
+                  const SizedBox(height: 16),
+
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Các ví của bạn (DataService)',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      IconButton(
+                        onPressed: _showAddWalletDialog,
+                        icon: const Icon(Icons.add_circle_outline),
+                        tooltip: 'Thêm ví mới',
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 8),
+                  _buildWalletsListWithDataService(currencyFormatter),
+                  const SizedBox(height: 24),
+
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Giao dịch gần đây (DataService)',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const AllTransactionsScreen(),
+                            ),
+                          );
+                        },
+                        child: const Text('Xem tất cả'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  _buildFilteredTransactionsWithDataService(currencyFormatter),
                 ],
               ),
-              const SizedBox(height: 8),
-              _buildFilteredTransactions(currencyFormatter),
-            ],
+            ),
           ),
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _navigateToAddTransaction,
-        tooltip: 'Thêm giao dịch',
-        child: const Icon(Icons.add),
-      ),
+          floatingActionButton: FloatingActionButton(
+            onPressed: _navigateToAddTransaction,
+            tooltip: 'Thêm giao dịch (DataService)',
+            child: const Icon(Icons.add),
+          ),
+        );
+      },
     );
   }
 
-  // Widget xây dựng danh sách ví từ Stream
-  Widget _buildWalletsList(NumberFormat currencyFormatter) {
-    final userProvider = Provider.of<UserProvider>(context, listen: false);
-    final auth = FirebaseAuth.instance;
-    return StreamBuilder<List<Wallet>>(
-      stream: _databaseService.getWalletsStream(userProvider),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+  Widget _buildWalletsListWithDataService(NumberFormat currencyFormatter) {
+    return Consumer<WalletProvider>(
+      builder: (context, walletProvider, child) {
+        if (walletProvider.isLoading) {
           return const Center(child: CircularProgressIndicator());
         }
-        if (snapshot.hasError) {
-          return Center(child: Text('Đã xảy ra lỗi: ${snapshot.error}'));
-        }
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
-          return const Center(child: Text('Chưa có ví nào. Hãy thêm ví mới!'));
+
+        if (walletProvider.hasError) {
+          return Center(
+            child: Column(
+              children: [
+                Text('Lỗi DataService: ${walletProvider.error}'),
+                ElevatedButton(
+                  onPressed: () =>
+                      walletProvider.loadWallets(forceRefresh: true),
+                  child: const Text('Thử lại'),
+                ),
+              ],
+            ),
+          );
         }
 
-        final wallets = snapshot.data!;
+        if (walletProvider.wallets.isEmpty) {
+          return const Center(
+            child: Text('Chưa có ví nào. Hãy thêm ví mới với DataService!'),
+          );
+        }
 
-        // Tính tổng số dư
-        final totalBalance = wallets.fold(
-          0.0,
-          (sum, wallet) => sum + wallet.balance,
-        );
+        final wallets = walletProvider.wallets;
 
         return Column(
           children: [
-            // Thẻ tổng quan
+            //  total balance card
             Card(
               elevation: 2,
               color: Theme.of(context).colorScheme.surface,
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Column(
                   children: [
-                    Text(
-                      'Tổng số dư',
-                      style: TextStyle(fontWeight: FontWeight.bold),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Tổng số dư',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          currencyFormatter.format(walletProvider.totalBalance),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                            color: Theme.of(context).primaryColor,
+                          ),
+                        ),
+                      ],
                     ),
-                    Text(
-                      currencyFormatter.format(totalBalance),
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18,
-                        color: Theme.of(context).primaryColor,
-                      ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Cá nhân: ${currencyFormatter.format(walletProvider.personalBalance)}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
+                            ),
+                            Text(
+                              'Chung: ${currencyFormatter.format(walletProvider.sharedBalance)}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Icon(
+                          walletProvider.isLoading
+                              ? Icons.sync
+                              : Icons.account_balance_wallet,
+                          color: Colors.grey,
+                          size: 16,
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 16),
-            // Danh sách chi tiết
+
+            // Wallets list
             ListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: wallets.length,
               itemBuilder: (context, index) {
                 final wallet = wallets[index];
+                final userProvider = Provider.of<UserProvider>(
+                  context,
+                  listen: false,
+                );
+
                 IconData walletIcon;
-                String walletTag = ""; // Nhãn phụ (tag)
-                Color iconColor = Colors.green; // Mặc định
+                String walletTag = "";
+                Color iconColor = Colors.green;
+
                 if (wallet.ownerId == userProvider.partnershipId) {
                   walletIcon = Icons.people;
                   walletTag = " (Chung)";
-                  iconColor = Colors.orange; // Màu khác cho ví chung
+                  iconColor = Colors.orange;
                 } else if (wallet.ownerId == userProvider.partnerUid) {
                   walletIcon = Icons.military_tech;
                   walletTag = " (Partner)";
-                  iconColor = Colors.blueGrey; // Màu khác cho ví của partner
+                  iconColor = Colors.blueGrey;
                 } else {
-                  // Ví của chính mình
                   walletIcon = Icons.person;
-                  walletTag = ""; // Không cần nhãn
+                  walletTag = "";
                 }
+
                 return Card(
                   margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
@@ -312,13 +476,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     title: Text(wallet.name + walletTag),
                     subtitle: Text(currencyFormatter.format(wallet.balance)),
-                    trailing: wallet.ownerId == auth.currentUser?.uid
+                    trailing:
+                        wallet.ownerId == FirebaseAuth.instance.currentUser?.uid
                         ? Switch(
                             value: wallet.isVisibleToPartner,
                             onChanged: (newValue) {
-                              _databaseService.updateWalletVisibility(
-                                wallet.id,
-                                newValue,
+                              // TODO: Implement updateWalletVisibility with DataService
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Cập nhật visibility chưa được implement với DataService',
+                                  ),
+                                  backgroundColor: Colors.orange,
+                                ),
                               );
                             },
                           )
@@ -333,49 +503,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildRecentTransactions(NumberFormat currencyFormatter) {
-    final userProvider = Provider.of<UserProvider>(context, listen: false);
-    return StreamBuilder<List<TransactionModel>>(
-      stream: _databaseService.getRecentTransactionsStream(userProvider),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
-          return const Center(child: Text('Chưa có giao dịch nào.'));
-        }
-        final transactions = snapshot.data!;
-
-        final groupedTransactions = groupBy(transactions, (TransactionModel t) {
-          return DateTime(t.date.year, t.date.month, t.date.day);
-        });
-        return Column(
-          children: groupedTransactions.entries.map((entry) {
-            return DailyTransactionsGroup(
-              date: entry.key,
-              transactions: entry.value,
-            );
-          }).toList(),
-        );
-      },
-    );
-  }
-
-  Widget _buildFilteredTransactions(NumberFormat currencyFormatter) {
-    final userProvider = Provider.of<UserProvider>(context, listen: false);
-
-    return StreamBuilder<List<TransactionModel>>(
-      stream: _databaseService.getTransactionsStream(
-        userProvider,
-        _startDate,
-        _endDate,
-      ),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+  Widget _buildFilteredTransactionsWithDataService(
+    NumberFormat currencyFormatter,
+  ) {
+    return Consumer<TransactionProvider>(
+      builder: (context, transactionProvider, child) {
+        if (transactionProvider.isLoading) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+        if (transactionProvider.hasError) {
+          return Center(
+            child: Column(
+              children: [
+                Text('Lỗi DataService: ${transactionProvider.error}'),
+                ElevatedButton(
+                  onPressed: () => transactionProvider.loadTransactions(
+                    startDate: _startDate,
+                    endDate: _endDate,
+                    forceRefresh: true,
+                  ),
+                  child: const Text('Thử lại'),
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (transactionProvider.transactions.isEmpty) {
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(32.0),
@@ -384,7 +539,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Icon(Icons.receipt_long, size: 64, color: Colors.grey),
                   SizedBox(height: 16),
                   Text(
-                    'Chưa có giao dịch nào trong khoảng thời gian này',
+                    'Chưa có giao dịch nào trong khoảng thời gian này (DataService)',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.grey),
                   ),
@@ -394,9 +549,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           );
         }
 
-        final transactions = snapshot.data!;
+        final transactions = transactionProvider.transactions;
 
-        // FIX: Group by date and use DailyTransactionsGroup template
+        // Group by date and use DailyTransactionsGroup template
         final groupedTransactions = groupBy(transactions, (TransactionModel t) {
           return DateTime(t.date.year, t.date.month, t.date.day);
         });
