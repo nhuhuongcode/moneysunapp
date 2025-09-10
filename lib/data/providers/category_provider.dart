@@ -4,11 +4,12 @@ import 'package:moneysun/data/services/data_service.dart'; // ✅ Updated import
 import 'package:moneysun/data/providers/user_provider.dart';
 
 class CategoryProvider extends ChangeNotifier {
-  final DataService _dataService; // ✅ Using unified service
+  final DataService _dataService;
   final UserProvider _userProvider;
 
   CategoryProvider(this._dataService, this._userProvider) {
     _dataService.addListener(_onDataServiceChanged);
+    _loadInitialData();
   }
 
   // ============ STATE MANAGEMENT ============
@@ -41,7 +42,7 @@ class CategoryProvider extends ChangeNotifier {
 
   // ============ PUBLIC METHODS ============
 
-  /// Load all categories - uses offline-first unified service
+  /// Load all categories using DataService
   Future<void> loadCategories({bool forceRefresh = false}) async {
     if (_isLoading && !forceRefresh) return;
 
@@ -49,7 +50,7 @@ class CategoryProvider extends ChangeNotifier {
     _clearError();
 
     try {
-      debugPrint('📂 Loading categories from unified service...');
+      debugPrint('📂 Loading categories from DataService...');
 
       final loadedCategories = await _dataService.getCategories(
         includeArchived: _includeArchived,
@@ -65,6 +66,11 @@ class CategoryProvider extends ChangeNotifier {
     } finally {
       _setLoading(false);
     }
+  }
+
+  /// Get categories stream using DataService
+  Stream<List<Category>> getCategoriesStream({bool includeArchived = false}) {
+    return _dataService.getCategoriesStream(includeArchived: includeArchived);
   }
 
   /// Get categories by type
@@ -124,8 +130,14 @@ class CategoryProvider extends ChangeNotifier {
 
   // ============ PRIVATE METHODS ============
 
+  void _loadInitialData() {
+    if (_dataService.isInitialized) {
+      loadCategories();
+    }
+  }
+
   void _onDataServiceChanged() {
-    if (!_isLoading) {
+    if (!_isLoading && _dataService.isInitialized) {
       loadCategories(forceRefresh: true);
     }
   }

@@ -1,14 +1,15 @@
 import 'package:flutter/foundation.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
-import 'package:moneysun/data/services/data_service.dart'; // ✅ Updated import
 import 'package:moneysun/data/providers/user_provider.dart';
+import 'package:moneysun/data/services/data_service.dart';
 
 class TransactionProvider extends ChangeNotifier {
-  final DataService _dataService; // ✅ Using unified service
+  final DataService _dataService;
   final UserProvider _userProvider;
 
   TransactionProvider(this._dataService, this._userProvider) {
     _dataService.addListener(_onDataServiceChanged);
+    _loadInitialData();
   }
 
   // ============ STATE MANAGEMENT ============
@@ -42,7 +43,7 @@ class TransactionProvider extends ChangeNotifier {
 
   // ============ PUBLIC METHODS ============
 
-  /// Load transactions - uses offline-first unified service
+  /// Load transactions using DataService
   Future<void> loadTransactions({
     DateTime? startDate,
     DateTime? endDate,
@@ -57,7 +58,7 @@ class TransactionProvider extends ChangeNotifier {
     _clearError();
 
     try {
-      debugPrint('📊 Loading transactions from unified service...');
+      debugPrint('📊 Loading transactions from DataService...');
 
       final loadedTransactions = await _dataService.getTransactions(
         startDate: startDate,
@@ -79,27 +80,47 @@ class TransactionProvider extends ChangeNotifier {
     }
   }
 
-  /// Add new transaction - optimistic UI with offline support
+  /// Add new transaction using DataService
   Future<bool> addTransaction(TransactionModel transaction) async {
     _clearError();
 
     try {
       debugPrint('➕ Adding transaction: ${transaction.description}');
 
-      await _dataService.addTransaction(transaction);
-
       // Optimistic update - add to local list immediately
       _transactions.insert(0, transaction);
       _applyCurrentFilters();
       notifyListeners();
 
+      await _dataService.addTransaction(transaction);
+
       debugPrint('✅ Transaction added successfully');
       return true;
     } catch (e) {
+      // Revert optimistic update
+      _transactions.removeWhere((t) => t.id == transaction.id);
+      _applyCurrentFilters();
+
       _setError('Không thể thêm giao dịch: $e');
       debugPrint('❌ Error adding transaction: $e');
+      notifyListeners();
       return false;
     }
+  }
+
+  /// Get transactions stream using DataService
+  Stream<List<TransactionModel>> getTransactionsStream({
+    DateTime? startDate,
+    DateTime? endDate,
+    String? walletId,
+    String? categoryId,
+  }) {
+    return _dataService.getTransactionsStream(
+      startDate: startDate,
+      endDate: endDate,
+      walletId: walletId,
+      categoryId: categoryId,
+    );
   }
 
   /// Apply date filter
@@ -206,8 +227,14 @@ class TransactionProvider extends ChangeNotifier {
 
   // ============ PRIVATE METHODS ============
 
+  void _loadInitialData() {
+    if (_dataService.isInitialized) {
+      loadRecentTransactions();
+    }
+  }
+
   void _onDataServiceChanged() {
-    if (!_isLoading) {
+    if (!_isLoading && _dataService.isInitialized) {
       loadTransactions(forceRefresh: true);
     }
   }

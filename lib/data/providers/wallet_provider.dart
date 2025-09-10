@@ -4,11 +4,12 @@ import 'package:moneysun/data/services/data_service.dart'; // ✅ Updated import
 import 'package:moneysun/data/providers/user_provider.dart';
 
 class WalletProvider extends ChangeNotifier {
-  final DataService _dataService; // ✅ Using unified service
+  final DataService _dataService;
   final UserProvider _userProvider;
 
   WalletProvider(this._dataService, this._userProvider) {
     _dataService.addListener(_onDataServiceChanged);
+    _loadInitialData();
   }
 
   // ============ STATE MANAGEMENT ============
@@ -17,7 +18,6 @@ class WalletProvider extends ChangeNotifier {
   bool _isLoading = false;
   String? _error;
   bool _includeArchived = false;
-  bool _showOnlyVisible = false;
 
   // ============ GETTERS ============
   List<Wallet> get wallets => _filteredWallets;
@@ -44,7 +44,6 @@ class WalletProvider extends ChangeNotifier {
   bool get hasError => _error != null;
   int get walletCount => _filteredWallets.length;
   bool get includeArchived => _includeArchived;
-  bool get showOnlyVisible => _showOnlyVisible;
 
   // Financial overview
   double get totalBalance =>
@@ -56,7 +55,7 @@ class WalletProvider extends ChangeNotifier {
 
   // ============ PUBLIC METHODS ============
 
-  /// Load all wallets - uses offline-first unified service
+  /// Load all wallets using DataService
   Future<void> loadWallets({bool forceRefresh = false}) async {
     if (_isLoading && !forceRefresh) return;
 
@@ -64,7 +63,7 @@ class WalletProvider extends ChangeNotifier {
     _clearError();
 
     try {
-      debugPrint('📂 Loading wallets from unified service...');
+      debugPrint('📂 Loading wallets from DataService...');
 
       final loadedWallets = await _dataService.getWallets(
         includeArchived: _includeArchived,
@@ -82,7 +81,7 @@ class WalletProvider extends ChangeNotifier {
     }
   }
 
-  /// Add new wallet - optimistic UI with offline support
+  /// Add new wallet using DataService with optimistic updates
   Future<bool> addWallet({
     required String name,
     required double initialBalance,
@@ -92,8 +91,23 @@ class WalletProvider extends ChangeNotifier {
   }) async {
     _clearError();
 
+    // Create temporary wallet for optimistic update
+    final tempWallet = Wallet(
+      id: 'temp_${DateTime.now().millisecondsSinceEpoch}',
+      name: name,
+      balance: initialBalance,
+      ownerId: ownerId ?? _userProvider.currentUser?.uid ?? '',
+      isVisibleToPartner: isVisibleToPartner,
+      type: type,
+    );
+
     try {
       debugPrint('➕ Adding wallet: $name');
+
+      // Optimistic update - add to local list immediately
+      _wallets.add(tempWallet);
+      _applyCurrentFilters();
+      notifyListeners();
 
       await _dataService.addWallet(
         name: name,
@@ -103,16 +117,27 @@ class WalletProvider extends ChangeNotifier {
         ownerId: ownerId,
       );
 
-      // Reload wallets to get the new one
+      // Remove temp wallet and reload from database
+      _wallets.removeWhere((w) => w.id == tempWallet.id);
       await loadWallets(forceRefresh: true);
 
       debugPrint('✅ Wallet added successfully');
       return true;
     } catch (e) {
+      // Revert optimistic update
+      _wallets.removeWhere((w) => w.id == tempWallet.id);
+      _applyCurrentFilters();
+
       _setError('Không thể thêm ví: $e');
       debugPrint('❌ Error adding wallet: $e');
+      notifyListeners();
       return false;
     }
+  }
+
+  /// Get wallets stream using DataService
+  Stream<List<Wallet>> getWalletsStream({bool includeArchived = false}) {
+    return _dataService.getWalletsStream(includeArchived: includeArchived);
   }
 
   /// Get wallet by ID
@@ -170,8 +195,14 @@ class WalletProvider extends ChangeNotifier {
 
   // ============ PRIVATE METHODS ============
 
+  void _loadInitialData() {
+    if (_dataService.isInitialized) {
+      loadWallets();
+    }
+  }
+
   void _onDataServiceChanged() {
-    if (!_isLoading) {
+    if (!_isLoading && _dataService.isInitialized) {
       loadWallets(forceRefresh: true);
     }
   }
@@ -180,10 +211,6 @@ class WalletProvider extends ChangeNotifier {
     _filteredWallets = _wallets.where((wallet) {
       // Archive filter
       if (!_includeArchived && wallet.isArchived) return false;
-
-      // Visibility filter
-      if (_showOnlyVisible && !wallet.isVisibleToPartner) return false;
-
       return true;
     }).toList();
 

@@ -1,12 +1,12 @@
-// lib/app.dart - FIXED PROVIDER SETUP
 import 'package:flutter/material.dart' hide NotificationListener;
 import 'package:moneysun/core/theme/app_theme.dart';
+import 'package:moneysun/data/providers/category_provider.dart';
+import 'package:moneysun/data/providers/connection_status_provider.dart';
+import 'package:moneysun/data/providers/transaction_provider.dart';
+import 'package:moneysun/data/providers/wallet_provider.dart';
 import 'package:moneysun/data/services/data_service.dart';
 import 'package:moneysun/features/auth/presentation/screens/auth_gate.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
-import 'package:moneysun/data/providers/wallet_provider.dart';
-import 'package:moneysun/data/providers/category_provider.dart';
-import 'package:moneysun/data/providers/transaction_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:moneysun/presentation/widgets/notification_listener.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
@@ -19,20 +19,18 @@ class MoneySunApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         // ============ LEVEL 1: BASE PROVIDERS ============
-        
+
         // 1. UserProvider - No dependencies
-        ChangeNotifierProvider(
-          create: (context) => UserProvider(),
-        ),
+        ChangeNotifierProvider(create: (context) => UserProvider()),
 
         // ============ LEVEL 2: SERVICE PROVIDERS ============
-        
-        // 2. DataService - Depends on UserProvider
+
+        // 2. DataService - Single source of truth
         ChangeNotifierProxyProvider<UserProvider, DataService>(
           create: (context) => DataService(),
           update: (context, userProvider, dataService) {
             final service = dataService ?? DataService();
-            
+
             // Initialize DataService when UserProvider changes
             if (userProvider.isInitialized && !service.isInitialized) {
               WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -44,13 +42,13 @@ class MoneySunApp extends StatelessWidget {
                 }
               });
             }
-            
+
             return service;
           },
         ),
 
-        // ============ LEVEL 3: FEATURE PROVIDERS ============
-        
+        // ============ LEVEL 3:  FEATURE PROVIDERS ============
+
         // 3. WalletProvider - Depends on DataService + UserProvider
         ChangeNotifierProxyProvider2<DataService, UserProvider, WalletProvider>(
           create: (context) => WalletProvider(
@@ -66,7 +64,11 @@ class MoneySunApp extends StatelessWidget {
         ),
 
         // 4. CategoryProvider - Depends on DataService + UserProvider
-        ChangeNotifierProxyProvider2<DataService, UserProvider, CategoryProvider>(
+        ChangeNotifierProxyProvider2<
+          DataService,
+          UserProvider,
+          CategoryProvider
+        >(
           create: (context) => CategoryProvider(
             Provider.of<DataService>(context, listen: false),
             Provider.of<UserProvider>(context, listen: false),
@@ -80,7 +82,11 @@ class MoneySunApp extends StatelessWidget {
         ),
 
         // 5. TransactionProvider - Depends on DataService + UserProvider
-        ChangeNotifierProxyProvider2<DataService, UserProvider, TransactionProvider>(
+        ChangeNotifierProxyProvider2<
+          DataService,
+          UserProvider,
+          TransactionProvider
+        >(
           create: (context) => TransactionProvider(
             Provider.of<DataService>(context, listen: false),
             Provider.of<UserProvider>(context, listen: false),
@@ -94,8 +100,8 @@ class MoneySunApp extends StatelessWidget {
         ),
 
         // ============ LEVEL 4: UI STATE PROVIDERS ============
-        
-        // 6. Connection Status Provider - Depends on DataService
+
+        // 6.  Connection Status Provider - Depends on DataService
         ChangeNotifierProxyProvider<DataService, ConnectionStatusProvider>(
           create: (context) => ConnectionStatusProvider(),
           update: (context, dataService, connectionProvider) {
@@ -128,7 +134,7 @@ class MoneySunApp extends StatelessWidget {
   }
 }
 
-/// Main App Scaffold with connection status and debug panel
+///  App Scaffold with DataService integration
 class AppScaffold extends StatefulWidget {
   final ConnectionStatusProvider connectionStatus;
 
@@ -142,43 +148,54 @@ class _AppScaffoldState extends State<AppScaffold> {
   @override
   void initState() {
     super.initState();
-    _initializeProviders();
+    _initializeProvidersWithDataService();
   }
 
-  void _initializeProviders() {
+  void _initializeProvidersWithDataService() {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         // Check if user is authenticated before loading data
         final userProvider = Provider.of<UserProvider>(context, listen: false);
-        
+
         if (userProvider.isInitialized && userProvider.currentUser != null) {
-          debugPrint('🔄 User authenticated, loading initial data...');
-          
-          // Load initial data for authenticated user
-          await _loadInitialData();
+          debugPrint(
+            '🔄 User authenticated, loading initial data with DataService...',
+          );
+
+          // Load initial data for authenticated user using  providers
+          await _loadInitialDataWithDataService();
         }
       } catch (e) {
-        debugPrint('❌ Error during initial data loading: $e');
+        debugPrint('❌ Error during initial data loading with DataService: $e');
       }
     });
   }
 
-  Future<void> _loadInitialData() async {
+  Future<void> _loadInitialDataWithDataService() async {
     try {
-      final walletProvider = Provider.of<WalletProvider>(context, listen: false);
-      final categoryProvider = Provider.of<CategoryProvider>(context, listen: false);
-      final transactionProvider = Provider.of<TransactionProvider>(context, listen: false);
+      final walletProvider = Provider.of<WalletProvider>(
+        context,
+        listen: false,
+      );
+      final categoryProvider = Provider.of<CategoryProvider>(
+        context,
+        listen: false,
+      );
+      final transactionProvider = Provider.of<TransactionProvider>(
+        context,
+        listen: false,
+      );
 
-      // Load data in parallel for better performance
+      // Load data in parallel for better performance using  providers
       await Future.wait([
         walletProvider.loadWallets(),
         categoryProvider.loadCategories(),
         transactionProvider.loadRecentTransactions(),
       ]);
 
-      debugPrint('✅ Initial data loaded successfully');
+      debugPrint('✅ Initial data loaded successfully with DataService');
     } catch (e) {
-      debugPrint('❌ Error loading initial data: $e');
+      debugPrint('❌ Error loading initial data with DataService: $e');
     }
   }
 
@@ -189,7 +206,7 @@ class _AppScaffoldState extends State<AppScaffold> {
         // Main app content
         const NotificationListener(child: AuthGate()),
 
-        // Connection Status Banner
+        //  Connection Status Banner
         if (widget.connectionStatus.shouldShowBanner)
           Positioned(
             top: 0,
@@ -200,90 +217,14 @@ class _AppScaffoldState extends State<AppScaffold> {
             ),
           ),
 
-        // Debug Panel (only in debug mode)
+        //  Debug Panel (only in debug mode)
         if (kDebugMode) const DebugPanel(),
       ],
     );
   }
 }
 
-/// ENHANCED Connection Status Provider
-class ConnectionStatusProvider extends ChangeNotifier {
-  bool _isOnline = true;
-  bool _isSyncing = false;
-  int _pendingItems = 0;
-  String? _lastError;
-  DateTime? _lastSyncTime;
-  bool _isInitialized = false;
-
-  // Getters
-  bool get isOnline => _isOnline;
-  bool get isSyncing => _isSyncing;
-  int get pendingItems => _pendingItems;
-  String? get lastError => _lastError;
-  DateTime? get lastSyncTime => _lastSyncTime;
-  bool get isInitialized => _isInitialized;
-
-  bool get shouldShowBanner =>
-      !_isOnline || _pendingItems > 0 || _lastError != null;
-
-  String get statusMessage {
-    if (_lastError != null) return 'Lỗi đồng bộ';
-    if (_isSyncing) return 'Đang đồng bộ...';
-    if (!_isOnline) return 'Chế độ Offline';
-    if (_pendingItems > 0) return '$_pendingItems mục chưa đồng bộ';
-    return 'Đã đồng bộ';
-  }
-
-  Color get statusColor {
-    if (_lastError != null) return Colors.red;
-    if (_isSyncing) return Colors.orange;
-    if (!_isOnline) return Colors.grey;
-    if (_pendingItems > 0) return Colors.blue;
-    return Colors.green;
-  }
-
-  void updateFromDataService(DataService dataService) {
-    final newIsOnline = dataService.isOnline;
-    final newIsSyncing = dataService.isSyncing;
-    final newPendingItems = dataService.pendingItems;
-    final newLastError = dataService.lastError;
-    final newLastSyncTime = dataService.lastSyncTime;
-    final newIsInitialized = dataService.isInitialized;
-
-    bool hasChanges = false;
-
-    if (newIsOnline != _isOnline ||
-        newIsSyncing != _isSyncing ||
-        newPendingItems != _pendingItems ||
-        newLastError != _lastError ||
-        newLastSyncTime != _lastSyncTime ||
-        newIsInitialized != _isInitialized) {
-      
-      _isOnline = newIsOnline;
-      _isSyncing = newIsSyncing;
-      _pendingItems = newPendingItems;
-      _lastError = newLastError;
-      _lastSyncTime = newLastSyncTime;
-      _isInitialized = newIsInitialized;
-      hasChanges = true;
-    }
-
-    if (hasChanges) {
-      notifyListeners();
-    }
-  }
-
-  // Manual sync trigger
-  void clearError() {
-    if (_lastError != null) {
-      _lastError = null;
-      notifyListeners();
-    }
-  }
-}
-
-/// ENHANCED Connection Status Banner
+///  Connection Status Banner with DataService integration
 class ConnectionStatusBanner extends StatelessWidget {
   final ConnectionStatusProvider status;
 
@@ -384,7 +325,7 @@ class ConnectionStatusBanner extends StatelessWidget {
                         ),
                       ),
                     ),
-                  
+
                   const SizedBox(width: 12),
                 ],
               )
@@ -446,17 +387,20 @@ class ConnectionStatusBanner extends StatelessWidget {
 
   String _formatDateTime(DateTime dateTime) {
     return '${dateTime.hour.toString().padLeft(2, '0')}:'
-           '${dateTime.minute.toString().padLeft(2, '0')} '
-           '${dateTime.day}/${dateTime.month}';
+        '${dateTime.minute.toString().padLeft(2, '0')} '
+        '${dateTime.day}/${dateTime.month}';
   }
 
   void _retrySyncManually(BuildContext context) async {
     try {
       final dataService = Provider.of<DataService>(context, listen: false);
       await dataService.forceSyncNow();
-      
+
       // Clear error status
-      Provider.of<ConnectionStatusProvider>(context, listen: false).clearError();
+      Provider.of<ConnectionStatusProvider>(
+        context,
+        listen: false,
+      ).clearError();
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -481,7 +425,7 @@ class ConnectionStatusBanner extends StatelessWidget {
   }
 }
 
-/// Global Error Display Widget
+///  Error Display Widget
 class ErrorDisplayWidget extends StatelessWidget {
   final String error;
 
@@ -506,7 +450,7 @@ class ErrorDisplayWidget extends StatelessWidget {
                   ),
                   const SizedBox(height: 24),
                   Text(
-                    'Đã xảy ra lỗi',
+                    'Đã xảy ra lỗi với DataService',
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
@@ -516,11 +460,8 @@ class ErrorDisplayWidget extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'Ứng dụng gặp lỗi không mong muốn. Vui lòng thử khởi động lại.',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.red.shade600,
-                    ),
+                    'Ứng dụng gặp lỗi với DataService. Vui lòng thử khởi động lại.',
+                    style: TextStyle(fontSize: 16, color: Colors.red.shade600),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
@@ -582,7 +523,7 @@ class ErrorDisplayWidget extends StatelessWidget {
   }
 }
 
-/// ENHANCED Debug Panel with more features
+///  Debug Panel with DataService info
 class DebugPanel extends StatelessWidget {
   const DebugPanel({super.key});
 
@@ -598,24 +539,24 @@ class DebugPanel extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Debug info button
+              // DataService debug info button
               FloatingActionButton.small(
-                heroTag: "debug_info",
-                onPressed: () => _showDebugInfo(
+                heroTag: "dataservice_debug",
+                onPressed: () => _showDataServiceDebugInfo(
                   context,
                   dataService,
                   userProvider,
                   connectionStatus,
                 ),
                 backgroundColor: Colors.purple,
-                child: const Icon(Icons.bug_report, color: Colors.white),
+                child: const Icon(Icons.storage, color: Colors.white),
               ),
               const SizedBox(height: 8),
-              
+
               // Force sync button
               FloatingActionButton.small(
                 heroTag: "force_sync",
-                onPressed: () => _performForceSync(context, dataService),
+                onPressed: () => _performDataServiceSync(context, dataService),
                 backgroundColor: Colors.blue,
                 child: const Icon(Icons.sync, color: Colors.white),
               ),
@@ -626,7 +567,7 @@ class DebugPanel extends StatelessWidget {
     );
   }
 
-  void _showDebugInfo(
+  void _showDataServiceDebugInfo(
     BuildContext context,
     DataService dataService,
     UserProvider userProvider,
@@ -638,37 +579,49 @@ class DebugPanel extends StatelessWidget {
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Debug Info - MoneySun'),
+          title: const Text('DataService Debug Info'),
           content: SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                _buildSection('🔧 Core Services', [
-                  _buildDebugRow('DataService Init', '${dataService.isInitialized}'),
+                _buildSection('🔧 DataService Status', [
+                  _buildDebugRow('Initialized', '${dataService.isInitialized}'),
                   _buildDebugRow('Online Status', '${dataService.isOnline}'),
                   _buildDebugRow('Syncing', '${dataService.isSyncing}'),
-                  _buildDebugRow('Pending Items', '${dataService.pendingItems}'),
+                  _buildDebugRow(
+                    'Pending Items',
+                    '${dataService.pendingItems}',
+                  ),
+                  _buildDebugRow('Last Error', dataService.lastError ?? 'none'),
                 ]),
-                
+
                 _buildSection('👤 User Info', [
-                  _buildDebugRow('User ID', userProvider.currentUser?.uid ?? 'null'),
-                  _buildDebugRow('Partnership', userProvider.partnershipId ?? 'null'),
-                  _buildDebugRow('Partner', userProvider.partnerDisplayName ?? 'null'),
+                  _buildDebugRow(
+                    'User ID',
+                    userProvider.currentUser?.uid ?? 'null',
+                  ),
+                  _buildDebugRow(
+                    'Partnership',
+                    userProvider.partnershipId ?? 'null',
+                  ),
+                  _buildDebugRow(
+                    'Partner',
+                    userProvider.partnerDisplayName ?? 'null',
+                  ),
                 ]),
-                
-                _buildSection('🔄 Sync Status', [
-                  _buildDebugRow('Last Sync', healthStatus['lastSyncTime'] ?? 'never'),
-                  _buildDebugRow('Last Error', healthStatus['lastError'] ?? 'none'),
+
+                _buildSection('🔄 Sync Health', [
+                  _buildDebugRow(
+                    'Last Sync',
+                    healthStatus['lastSyncTime'] ?? 'never',
+                  ),
+                  _buildDebugRow(
+                    'Pending Sync',
+                    '${healthStatus['pendingSync'] ?? 0}',
+                  ),
                   _buildDebugRow('Connection', '${connectionStatus.isOnline}'),
                 ]),
-                
-                if (healthStatus['databaseStats'] != null)
-                  _buildSection('📊 Database', [
-                    ...(healthStatus['databaseStats'] as Map<String, dynamic>)
-                        .entries
-                        .map((e) => _buildDebugRow(e.key, '${e.value}')),
-                  ]),
               ],
             ),
           ),
@@ -684,14 +637,14 @@ class DebugPanel extends StatelessWidget {
                   Navigator.of(context).pop();
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('Force sync completed'),
+                      content: Text('DataService sync completed'),
                       backgroundColor: Colors.green,
                     ),
                   );
                 } catch (e) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text('Sync failed: $e'),
+                      content: Text('DataService sync failed: $e'),
                       backgroundColor: Colors.red,
                     ),
                   );
@@ -712,10 +665,7 @@ class DebugPanel extends StatelessWidget {
         const SizedBox(height: 16),
         Text(
           title,
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 14,
-          ),
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
         ),
         const SizedBox(height: 8),
         ...children,
@@ -733,10 +683,7 @@ class DebugPanel extends StatelessWidget {
             width: 90,
             child: Text(
               '$label:',
-              style: const TextStyle(
-                fontWeight: FontWeight.w500,
-                fontSize: 12,
-              ),
+              style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
             ),
           ),
           Expanded(
@@ -754,11 +701,14 @@ class DebugPanel extends StatelessWidget {
     );
   }
 
-  void _performForceSync(BuildContext context, DataService dataService) async {
+  void _performDataServiceSync(
+    BuildContext context,
+    DataService dataService,
+  ) async {
     try {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Starting force sync...'),
+          content: Text('Starting DataService sync...'),
           duration: Duration(seconds: 1),
         ),
       );
@@ -767,14 +717,14 @@ class DebugPanel extends StatelessWidget {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Force sync completed successfully'),
+          content: Text('DataService sync completed successfully'),
           backgroundColor: Colors.green,
         ),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Force sync failed: $e'),
+          content: Text('DataService sync failed: $e'),
           backgroundColor: Colors.red,
         ),
       );
