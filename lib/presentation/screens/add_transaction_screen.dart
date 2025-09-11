@@ -1,4 +1,4 @@
-// lib/presentation/screens/add_transaction_screen.dart
+// lib/presentation/screens/add_transaction_screen_.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
@@ -6,10 +6,14 @@ import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
-import 'package:moneysun/data/services/database_service.dart';
-import 'package:moneysun/data/services/offline_sync_service.dart';
+import 'package:moneysun/data/providers/wallet_provider.dart';
+import 'package:moneysun/data/providers/category_provider.dart';
+import 'package:moneysun/data/providers/transaction_provider.dart';
+import 'package:moneysun/data/providers/connection_status_provider.dart';
 import 'package:moneysun/presentation/screens/transfer_screen.dart';
+import 'package:moneysun/presentation/widgets/category_ownership_selector.dart';
 import 'package:moneysun/presentation/widgets/smart_amount_input.dart';
+import 'package:moneysun/presentation/widgets/enhanced_category_creation.dart';
 import 'package:provider/provider.dart';
 
 class AddTransactionScreen extends StatefulWidget {
@@ -26,8 +30,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
   final _formKey = GlobalKey<FormState>();
   final _amountController = TextEditingController();
   final _descriptionController = TextEditingController();
-  final DatabaseService _databaseService = DatabaseService();
-  final OfflineSyncService _offlineSyncService = OfflineSyncService();
 
   // Transaction type animation
   late AnimationController _typeAnimationController;
@@ -39,7 +41,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
   String? _selectedSubCategoryId;
   DateTime _selectedDate = DateTime.now();
 
-  bool _isOnline = false;
   bool _isLoading = false;
   List<String> _descriptionHistory = [];
 
@@ -57,7 +58,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
       curve: Curves.easeInOut,
     );
 
-    _initializeServices();
     _loadDescriptionHistory();
 
     if (widget.transactionToEdit != null) {
@@ -76,21 +76,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     super.dispose();
   }
 
-  Future<void> _initializeServices() async {
-    await _offlineSyncService.initialize();
-    setState(() {
-      _isOnline = _offlineSyncService.isOnline;
-    });
-
-    _offlineSyncService.addListener(() {
-      if (mounted) {
-        setState(() {
-          _isOnline = _offlineSyncService.isOnline;
-        });
-      }
-    });
-  }
-
   void _populateFieldsForEdit() {
     final transaction = widget.transactionToEdit!;
     _amountController.text = NumberFormat(
@@ -106,155 +91,189 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
   }
 
   Future<void> _loadDescriptionHistory() async {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-    if (userId != null) {
-      final history = await _offlineSyncService.getDescriptionSuggestions(
-        userId,
-        limit: 10,
-      );
-      setState(() {
-        _descriptionHistory = history;
-      });
-    }
+    // TODO: Implement description history loading from DataService
+    // For now, use sample data
+    setState(() {
+      _descriptionHistory = [
+        'Ăn trưa',
+        'Cà phê',
+        'Xăng xe',
+        'Siêu thị',
+        'Điện thoại',
+        'Internet',
+        'Thuê nhà',
+        'Ăn sáng',
+        'Grab',
+        'Shopee',
+      ];
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final userProvider = Provider.of<UserProvider>(context);
+    return Consumer5<
+      UserProvider,
+      WalletProvider,
+      CategoryProvider,
+      TransactionProvider,
+      ConnectionStatusProvider
+    >(
+      builder:
+          (
+            context,
+            userProvider,
+            walletProvider,
+            categoryProvider,
+            transactionProvider,
+            connectionStatus,
+            child,
+          ) {
+            return Scaffold(
+              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+              appBar: _buildAppBar(connectionStatus),
+              body: AnimatedBuilder(
+                animation: _typeAnimation,
+                builder: (context, child) {
+                  return Stack(
+                    children: [
+                      // Gradient Background
+                      Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              Theme.of(context).primaryColor.withOpacity(0.05),
+                              Theme.of(context).scaffoldBackgroundColor,
+                              Theme.of(context).primaryColor.withOpacity(0.02),
+                            ],
+                            stops: const [0.0, 0.5, 1.0],
+                          ),
+                        ),
+                      ),
 
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: _buildAppBar(),
-      body: AnimatedBuilder(
-        animation: _typeAnimation,
-        builder: (context, child) {
-          return Stack(
-            children: [
-              // Gradient Background
-              Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Theme.of(context).primaryColor.withOpacity(0.05),
-                      Theme.of(context).scaffoldBackgroundColor,
-                      Theme.of(context).primaryColor.withOpacity(0.02),
+                      // Main Content
+                      Form(
+                        key: _formKey,
+                        child: ListView(
+                          padding: const EdgeInsets.fromLTRB(20, 20, 20, 100),
+                          children: [
+                            // Transaction Type Selector with Animation
+                            FadeTransition(
+                              opacity: _typeAnimation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0, 0.3),
+                                  end: Offset.zero,
+                                ).animate(_typeAnimation),
+                                child: _buildTransactionTypeSelector(),
+                              ),
+                            ),
+
+                            const SizedBox(height: 24),
+
+                            // Smart Amount Input
+                            FadeTransition(
+                              opacity: _typeAnimation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0, 0.4),
+                                  end: Offset.zero,
+                                ).animate(_typeAnimation),
+                                child: _buildSmartAmountInput(),
+                              ),
+                            ),
+
+                            const SizedBox(height: 20),
+
+                            // Wallet Selector
+                            FadeTransition(
+                              opacity: _typeAnimation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0, 0.5),
+                                  end: Offset.zero,
+                                ).animate(_typeAnimation),
+                                child: _buildWalletSelector(
+                                  walletProvider,
+                                  userProvider,
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(height: 20),
+
+                            // Category Selector
+                            FadeTransition(
+                              opacity: _typeAnimation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0, 0.6),
+                                  end: Offset.zero,
+                                ).animate(_typeAnimation),
+                                child: _buildCategorySelector(
+                                  categoryProvider,
+                                  userProvider,
+                                ),
+                              ),
+                            ),
+
+                            if (_selectedCategoryId != null) ...[
+                              const SizedBox(height: 20),
+                              FadeTransition(
+                                opacity: _typeAnimation,
+                                child: _buildSubCategorySelector(
+                                  categoryProvider,
+                                ),
+                              ),
+                            ],
+
+                            const SizedBox(height: 20),
+
+                            // Date Selector
+                            FadeTransition(
+                              opacity: _typeAnimation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0, 0.7),
+                                  end: Offset.zero,
+                                ).animate(_typeAnimation),
+                                child: _buildDateSelector(),
+                              ),
+                            ),
+
+                            const SizedBox(height: 20),
+
+                            // Description Input
+                            FadeTransition(
+                              opacity: _typeAnimation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0, 0.8),
+                                  end: Offset.zero,
+                                ).animate(_typeAnimation),
+                                child: _buildDescriptionInput(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      //  Submit Button
+                      _buildFloatingSubmitButton(
+                        transactionProvider,
+                        connectionStatus,
+                      ),
                     ],
-                    stops: const [0.0, 0.5, 1.0],
-                  ),
-                ),
+                  );
+                },
               ),
-
-              // Main Content
-              Form(
-                key: _formKey,
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 100),
-                  children: [
-                    // Transaction Type Selector with Animation
-                    FadeTransition(
-                      opacity: _typeAnimation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.3),
-                          end: Offset.zero,
-                        ).animate(_typeAnimation),
-                        child: _buildEnhancedTransactionTypeSelector(),
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Smart Amount Input
-                    FadeTransition(
-                      opacity: _typeAnimation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.4),
-                          end: Offset.zero,
-                        ).animate(_typeAnimation),
-                        child: _buildSmartAmountInput(),
-                      ),
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    // Wallet Selector
-                    FadeTransition(
-                      opacity: _typeAnimation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.5),
-                          end: Offset.zero,
-                        ).animate(_typeAnimation),
-                        child: _buildEnhancedWalletSelector(userProvider),
-                      ),
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    // Category Selector
-                    FadeTransition(
-                      opacity: _typeAnimation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.6),
-                          end: Offset.zero,
-                        ).animate(_typeAnimation),
-                        child: _buildEnhancedCategorySelector(),
-                      ),
-                    ),
-
-                    if (_selectedCategoryId != null) ...[
-                      const SizedBox(height: 20),
-                      FadeTransition(
-                        opacity: _typeAnimation,
-                        child: _buildEnhancedSubCategorySelector(),
-                      ),
-                    ],
-
-                    const SizedBox(height: 20),
-
-                    // Date Selector
-                    FadeTransition(
-                      opacity: _typeAnimation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.7),
-                          end: Offset.zero,
-                        ).animate(_typeAnimation),
-                        child: _buildEnhancedDateSelector(),
-                      ),
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    // Description Input
-                    FadeTransition(
-                      opacity: _typeAnimation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.8),
-                          end: Offset.zero,
-                        ).animate(_typeAnimation),
-                        child: _buildEnhancedDescriptionInput(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Enhanced Submit Button
-              _buildFloatingSubmitButton(),
-            ],
-          );
-        },
-      ),
+            );
+          },
     );
   }
 
-  PreferredSizeWidget _buildAppBar() {
+  PreferredSizeWidget _buildAppBar(ConnectionStatusProvider connectionStatus) {
     return AppBar(
       elevation: 0,
       backgroundColor: Colors.transparent,
@@ -288,7 +307,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
             ),
           ),
           const SizedBox(width: 12),
-          _buildConnectionStatusBadge(),
+          _buildConnectionStatusBadge(connectionStatus),
         ],
       ),
       actions: [
@@ -320,17 +339,19 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildConnectionStatusBadge() {
+  Widget _buildConnectionStatusBadge(
+    ConnectionStatusProvider connectionStatus,
+  ) {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: _isOnline
+        color: connectionStatus.isOnline
             ? Colors.green.withOpacity(0.15)
             : Colors.orange.withOpacity(0.15),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: _isOnline
+          color: connectionStatus.isOnline
               ? Colors.green.withOpacity(0.3)
               : Colors.orange.withOpacity(0.3),
           width: 1,
@@ -339,18 +360,40 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            _isOnline ? Icons.wifi_rounded : Icons.wifi_off_rounded,
-            size: 14,
-            color: _isOnline ? Colors.green.shade700 : Colors.orange.shade700,
-          ),
+          if (connectionStatus.isSyncing)
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  connectionStatus.isOnline
+                      ? Colors.green.shade700
+                      : Colors.orange.shade700,
+                ),
+              ),
+            )
+          else
+            Icon(
+              connectionStatus.isOnline
+                  ? Icons.wifi_rounded
+                  : Icons.wifi_off_rounded,
+              size: 14,
+              color: connectionStatus.isOnline
+                  ? Colors.green.shade700
+                  : Colors.orange.shade700,
+            ),
           const SizedBox(width: 6),
           Text(
-            _isOnline ? 'Online' : 'Offline',
+            connectionStatus.isSyncing
+                ? 'Syncing'
+                : (connectionStatus.isOnline ? 'Online' : 'Offline'),
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: _isOnline ? Colors.green.shade800 : Colors.orange.shade800,
+              color: connectionStatus.isOnline
+                  ? Colors.green.shade800
+                  : Colors.orange.shade800,
             ),
           ),
         ],
@@ -358,7 +401,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildEnhancedTransactionTypeSelector() {
+  Widget _buildTransactionTypeSelector() {
     return Container(
       padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
@@ -557,7 +600,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildEnhancedWalletSelector(UserProvider userProvider) {
+  Widget _buildWalletSelector(
+    WalletProvider walletProvider,
+    UserProvider userProvider,
+  ) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -593,65 +639,32 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                 'Chọn ví',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
-              // Connection status indicator
-              const Spacer(),
-              if (!_isOnline)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.wifi_off_rounded,
-                        size: 12,
-                        color: Colors.orange.shade700,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Offline',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.orange.shade700,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
             ],
           ),
           const SizedBox(height: 16),
 
-          // FIX: StreamBuilder với error handling và offline support
+          // StreamBuilder with error handling and offline support
           StreamBuilder<List<Wallet>>(
-            stream: _databaseService.getSelectableWalletsStream(userProvider),
+            stream: walletProvider.getWalletsStream(),
             builder: (context, snapshot) {
-              // Handle different connection states
-              if (snapshot.connectionState == ConnectionState.waiting) {
+              if (walletProvider.isLoading) {
                 return _buildLoadingState();
               }
 
-              if (snapshot.hasError) {
-                return _buildErrorState(snapshot.error.toString());
+              if (walletProvider.hasError) {
+                return _buildErrorState(
+                  walletProvider.error ?? 'Unknown error',
+                );
               }
 
-              if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                return _buildEmptyWalletState();
+              final wallets = walletProvider.wallets;
+              if (wallets.isEmpty) {
+                return _buildEmptyWalletState(walletProvider, userProvider);
               }
 
-              final wallets = snapshot.data!;
-
-              // FIX: Validate selected wallet still exists
+              // Validate selected wallet still exists
               if (_selectedWalletId != null &&
                   !wallets.any((w) => w.id == _selectedWalletId)) {
-                // Reset selection if wallet no longer exists
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   setState(() => _selectedWalletId = null);
                 });
@@ -665,7 +678,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  // FIX: Wallet dropdown with corrected display logic
   Widget _buildWalletDropdown(List<Wallet> wallets, UserProvider userProvider) {
     return DropdownButtonFormField<String>(
       value: _selectedWalletId,
@@ -700,7 +712,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
         ),
       ),
       items: wallets.map((wallet) {
-        // FIX: Calculate display info correctly
         final walletDisplayInfo = _getWalletDisplayInfo(wallet, userProvider);
 
         return DropdownMenuItem<String>(
@@ -733,18 +744,16 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    // Show balance if available
-                    if (wallet.balance != null)
-                      Text(
-                        NumberFormat.currency(
-                          locale: 'vi_VN',
-                          symbol: '₫',
-                        ).format(wallet.balance),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade600,
-                        ),
+                    Text(
+                      NumberFormat.currency(
+                        locale: 'vi_VN',
+                        symbol: '₫',
+                      ).format(wallet.balance),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
                       ),
+                    ),
                   ],
                 ),
               ),
@@ -754,18 +763,16 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
       }).toList(),
       onChanged: (value) => setState(() => _selectedWalletId = value),
       validator: (value) => value == null ? 'Vui lòng chọn ví' : null,
-      // FIX: Handle dropdown errors gracefully
       onTap: () {
-        // Close keyboard when dropdown opens
         FocusScope.of(context).unfocus();
       },
     );
   }
 
-  // FIX: Helper class for wallet display info
-
-  // FIX: Enhanced empty state with create wallet option
-  Widget _buildEmptyWalletState() {
+  Widget _buildEmptyWalletState(
+    WalletProvider walletProvider,
+    UserProvider userProvider,
+  ) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -791,31 +798,27 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
           ),
           const SizedBox(height: 8),
           Text(
-            _isOnline
-                ? 'Hãy tạo ví đầu tiên của bạn'
-                : 'Vui lòng kết nối mạng để tạo ví mới',
+            'Hãy tạo ví đầu tiên của bạn',
             style: TextStyle(color: Colors.grey.shade600),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 16),
-          if (_isOnline)
-            ElevatedButton.icon(
-              onPressed: _showQuickCreateWalletDialog,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('Tạo ví mới'),
-              style: ElevatedButton.styleFrom(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+          ElevatedButton.icon(
+            onPressed: () => _showQuickCreateWalletDialog(walletProvider),
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('Tạo ví mới'),
+            style: ElevatedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
               ),
             ),
+          ),
         ],
       ),
     );
   }
 
-  // FIX: Quick create wallet dialog
-  void _showQuickCreateWalletDialog() {
+  void _showQuickCreateWalletDialog(WalletProvider walletProvider) {
     final nameController = TextEditingController();
     final balanceController = TextEditingController();
 
@@ -857,12 +860,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                 try {
                   final balance =
                       double.tryParse(balanceController.text) ?? 0.0;
-                  final currentUserId = FirebaseAuth.instance.currentUser!.uid;
 
-                  await _databaseService.addWallet(
-                    name,
-                    balance,
-                    currentUserId,
+                  await walletProvider.addWallet(
+                    name: name,
+                    initialBalance: balance,
                   );
 
                   Navigator.pop(context);
@@ -890,7 +891,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildEnhancedCategorySelector() {
+  Widget _buildCategorySelector(
+    CategoryProvider categoryProvider,
+    UserProvider userProvider,
+  ) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -935,17 +939,25 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
           ),
           const SizedBox(height: 16),
           StreamBuilder<List<Category>>(
-            stream: _databaseService.getCategoriesByTypeStream(
-              _selectedType == TransactionType.income ? 'income' : 'expense',
-            ),
+            stream: categoryProvider.getCategoriesStream(),
             builder: (context, snapshot) {
-              if (!snapshot.hasData) {
+              if (categoryProvider.isLoading) {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              final categories = snapshot.data!;
+              final allCategories = categoryProvider.categories;
+              final categories = allCategories
+                  .where(
+                    (cat) =>
+                        cat.type ==
+                        (_selectedType == TransactionType.income
+                            ? 'income'
+                            : 'expense'),
+                  )
+                  .toList();
+
               if (categories.isEmpty) {
-                return _buildEmptyCategoryState();
+                return _buildEmptyCategoryState(categoryProvider, userProvider);
               }
 
               return Column(
@@ -1011,7 +1023,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton.icon(
-                      onPressed: () => _showAddCategoryDialog(),
+                      onPressed: () => _showAddCategoryDialog(
+                        categoryProvider,
+                        userProvider,
+                      ),
                       icon: const Icon(Icons.add_rounded, size: 18),
                       label: Text(
                         'Thêm danh mục ${_selectedType == TransactionType.income ? "thu nhập" : "chi tiêu"}',
@@ -1035,7 +1050,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildEmptyCategoryState() {
+  Widget _buildEmptyCategoryState(
+    CategoryProvider categoryProvider,
+    UserProvider userProvider,
+  ) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1062,7 +1080,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
           ),
           const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: () => _showAddCategoryDialog(),
+            onPressed: () =>
+                _showAddCategoryDialog(categoryProvider, userProvider),
             icon: const Icon(Icons.add_rounded),
             label: Text(
               'Tạo danh mục ${_selectedType == TransactionType.income ? "thu nhập" : "chi tiêu"}',
@@ -1080,7 +1099,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildEnhancedSubCategorySelector() {
+  Widget _buildSubCategorySelector(CategoryProvider categoryProvider) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1120,7 +1139,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
           ),
           const SizedBox(height: 16),
           StreamBuilder<List<Category>>(
-            stream: _databaseService.getCategoriesStream(),
+            stream: categoryProvider.getCategoriesStream(),
             builder: (context, snapshot) {
               if (!snapshot.hasData) {
                 return const CircularProgressIndicator();
@@ -1191,26 +1210,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                       setState(() => _selectedSubCategoryId = value);
                     },
                   ),
-                  const SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton.icon(
-                      onPressed: () =>
-                          _showAddSubCategoryDialog(selectedCategory.id),
-                      icon: const Icon(Icons.add_rounded, size: 18),
-                      label: const Text(
-                        'Thêm danh mục con',
-                        style: TextStyle(fontSize: 13),
-                      ),
-                      style: TextButton.styleFrom(
-                        foregroundColor: Colors.indigo,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                      ),
-                    ),
-                  ),
                 ],
               );
             },
@@ -1245,21 +1244,12 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
               ),
             ),
           ),
-          TextButton.icon(
-            onPressed: () => _showAddSubCategoryDialog(parentCategoryId),
-            icon: const Icon(Icons.add_rounded, size: 16),
-            label: const Text('Thêm', style: TextStyle(fontSize: 12)),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.indigo,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            ),
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildEnhancedDateSelector() {
+  Widget _buildDateSelector() {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1362,7 +1352,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildEnhancedDescriptionInput() {
+  Widget _buildDescriptionInput() {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1402,18 +1392,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
           ),
           const SizedBox(height: 16),
 
-          // Enhanced Description Input with Autocomplete
+          //  Description Input with Autocomplete
           Autocomplete<String>(
-            optionsBuilder: (TextEditingValue textEditingValue) async {
+            optionsBuilder: (TextEditingValue textEditingValue) {
               if (textEditingValue.text.isEmpty) {
                 return _descriptionHistory.take(5);
-              }
-
-              final userId = FirebaseAuth.instance.currentUser?.uid;
-              if (userId != null) {
-                final suggestions = await _offlineSyncService
-                    .searchDescriptionHistory(userId, textEditingValue.text);
-                return suggestions;
               }
 
               return _descriptionHistory
@@ -1596,7 +1579,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildFloatingSubmitButton() {
+  Widget _buildFloatingSubmitButton(
+    TransactionProvider transactionProvider,
+    ConnectionStatusProvider connectionStatus,
+  ) {
     return Positioned(
       left: 20,
       right: 20,
@@ -1624,7 +1610,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
             ],
           ),
           child: ElevatedButton(
-            onPressed: _isLoading ? null : _submitForm,
+            onPressed: _isLoading
+                ? null
+                : () => _submitForm(transactionProvider, connectionStatus),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.transparent,
               shadowColor: Colors.transparent,
@@ -1687,157 +1675,24 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
   }
 
   // Dialog Methods
-  void _showAddCategoryDialog() {
-    final nameController = TextEditingController();
-
+  void _showAddCategoryDialog(
+    CategoryProvider categoryProvider,
+    UserProvider userProvider,
+  ) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.purple.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(
-                Icons.add_circle_outline_rounded,
-                color: Colors.purple,
-                size: 20,
-              ),
+      builder: (context) => CategoryCreationDialog(
+        type: _selectedType == TransactionType.income ? 'income' : 'expense',
+        userProvider: userProvider,
+        onCreated: (name, ownershipType) {
+          // Category will be automatically available through the stream
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Đã tạo danh mục "$name" thành công'),
+              backgroundColor: Colors.green,
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'Thêm ${_selectedType == TransactionType.income ? "nguồn thu nhập" : "danh mục chi tiêu"}',
-                style: const TextStyle(fontSize: 16),
-              ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: InputDecoration(
-                labelText: 'Tên danh mục',
-                filled: true,
-                fillColor: Colors.purple.withOpacity(0.05),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide.none,
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: const BorderSide(color: Colors.purple, width: 2),
-                ),
-                prefixIcon: const Icon(Icons.category_outlined),
-              ),
-              autofocus: true,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Hủy'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final name = nameController.text.trim();
-              if (name.isNotEmpty) {
-                await _databaseService.addCategory(
-                  name,
-                  _selectedType == TransactionType.income
-                      ? 'income'
-                      : 'expense',
-                );
-                Navigator.pop(context);
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.purple,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: const Text('Thêm'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showAddSubCategoryDialog(String parentCategoryId) {
-    final nameController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.indigo.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(
-                Icons.add_circle_outline_rounded,
-                color: Colors.indigo,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 12),
-            const Text('Thêm danh mục con', style: TextStyle(fontSize: 16)),
-          ],
-        ),
-        content: TextField(
-          controller: nameController,
-          decoration: InputDecoration(
-            labelText: 'Tên danh mục con',
-            filled: true,
-            fillColor: Colors.indigo.withOpacity(0.05),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
-              borderSide: BorderSide.none,
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
-              borderSide: const BorderSide(color: Colors.indigo, width: 2),
-            ),
-            prefixIcon: const Icon(Icons.label_outline_rounded),
-          ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Hủy'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final name = nameController.text.trim();
-              if (name.isNotEmpty) {
-                await _databaseService.addSubCategory(parentCategoryId, name);
-                Navigator.pop(context);
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.indigo,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: const Text('Thêm'),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -1906,7 +1761,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     }
   }
 
-  Future<void> _submitForm() async {
+  Future<void> _submitForm(
+    TransactionProvider transactionProvider,
+    ConnectionStatusProvider connectionStatus,
+  ) async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
@@ -1927,45 +1785,45 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
         userId: FirebaseAuth.instance.currentUser!.uid,
       );
 
-      if (widget.transactionToEdit != null) {
-        await _databaseService.updateTransaction(
-          transaction,
-          widget.transactionToEdit!,
-        );
+      // Use TransactionProvider instead of direct service calls
+      final success = await transactionProvider.addTransaction(transaction);
+
+      if (success) {
+        final syncMessage = connectionStatus.isOnline
+            ? 'Giao dịch đã được lưu và đồng bộ thành công'
+            : 'Giao dịch đã được lưu (sẽ đồng bộ khi có mạng)';
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(
+                    connectionStatus.isOnline
+                        ? Icons.cloud_done_rounded
+                        : Icons.cloud_off_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(syncMessage)),
+                ],
+              ),
+              backgroundColor: connectionStatus.isOnline
+                  ? Colors.green
+                  : Colors.orange,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              margin: const EdgeInsets.all(16),
+            ),
+          );
+
+          Navigator.pop(context, true);
+        }
       } else {
-        await _offlineSyncService.addTransaction(transaction);
-      }
-
-      final syncMessage = _isOnline
-          ? 'Giao dịch đã được lưu và đồng bộ thành công'
-          : 'Giao dịch đã được lưu (sẽ đồng bộ khi có mạng)';
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Icon(
-                  _isOnline
-                      ? Icons.cloud_done_rounded
-                      : Icons.cloud_off_rounded,
-                  color: Colors.white,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                Expanded(child: Text(syncMessage)),
-              ],
-            ),
-            backgroundColor: _isOnline ? Colors.green : Colors.orange,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
-
-        Navigator.pop(context, true);
+        throw Exception('Failed to add transaction');
       }
     } catch (e) {
       if (mounted) {
@@ -2031,7 +1889,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     }
   }
 
-  // FIX: Loading state
   Widget _buildLoadingState() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -2050,16 +1907,12 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
             ),
           ),
           const SizedBox(width: 12),
-          Text(
-            _isOnline ? 'Đang tải danh sách ví...' : 'Đang tải từ bộ nhớ...',
-            style: TextStyle(color: Colors.grey.shade600),
-          ),
+          const Text('Đang tải danh sách ví...'),
         ],
       ),
     );
   }
 
-  // FIX: Error state with retry option
   Widget _buildErrorState(String error) {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -2082,16 +1935,13 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            _isOnline
-                ? 'Vui lòng kiểm tra kết nối mạng và thử lại'
-                : 'Dữ liệu offline không khả dụng. Vui lòng kết nối mạng.',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          const Text(
+            'Vui lòng kiểm tra kết nối mạng và thử lại',
+            style: TextStyle(fontSize: 12),
           ),
           const SizedBox(height: 12),
           ElevatedButton.icon(
             onPressed: () {
-              // Trigger refresh
               setState(() {});
             },
             icon: const Icon(Icons.refresh_rounded, size: 16),
@@ -2121,6 +1971,3 @@ class WalletDisplayInfo {
     required this.ownershipType,
   });
 }
-
-  // FIX: Calculate wallet display information
-  

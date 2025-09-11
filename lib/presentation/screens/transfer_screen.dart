@@ -1,11 +1,15 @@
-// lib/presentation/screens/transfer_screen.dart
+// lib/presentation/screens/transfer_screen_.dart
 import 'package:flutter/material.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
+import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
-import 'package:moneysun/data/services/database_service.dart';
+import 'package:moneysun/data/providers/wallet_provider.dart';
+import 'package:moneysun/data/providers/transaction_provider.dart';
+import 'package:moneysun/data/providers/connection_status_provider.dart';
 import 'package:moneysun/presentation/widgets/smart_amount_input.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class TransferScreen extends StatefulWidget {
   const TransferScreen({super.key});
@@ -17,7 +21,6 @@ class TransferScreen extends StatefulWidget {
 class _TransferScreenState extends State<TransferScreen>
     with TickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
-  final _databaseService = DatabaseService();
 
   // Controllers
   final _amountController = TextEditingController();
@@ -84,104 +87,127 @@ class _TransferScreenState extends State<TransferScreen>
 
   @override
   Widget build(BuildContext context) {
-    final userProvider = Provider.of<UserProvider>(context);
+    return Consumer4<
+      UserProvider,
+      WalletProvider,
+      TransactionProvider,
+      ConnectionStatusProvider
+    >(
+      builder:
+          (
+            context,
+            userProvider,
+            walletProvider,
+            transactionProvider,
+            connectionStatus,
+            child,
+          ) {
+            return Scaffold(
+              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+              appBar: _buildAppBar(connectionStatus),
+              body: AnimatedBuilder(
+                animation: _slideAnimation,
+                builder: (context, child) {
+                  return Stack(
+                    children: [
+                      // Gradient Background
+                      Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.blue.withOpacity(0.1),
+                              Theme.of(context).scaffoldBackgroundColor,
+                              Colors.green.withOpacity(0.05),
+                            ],
+                          ),
+                        ),
+                      ),
 
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: _buildAppBar(),
-      body: AnimatedBuilder(
-        animation: _slideAnimation,
-        builder: (context, child) {
-          return Stack(
-            children: [
-              // Gradient Background
-              Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.blue.withOpacity(0.1),
-                      Theme.of(context).scaffoldBackgroundColor,
-                      Colors.green.withOpacity(0.05),
+                      // Main Content
+                      Form(
+                        key: _formKey,
+                        child: ListView(
+                          padding: const EdgeInsets.fromLTRB(20, 20, 20, 100),
+                          children: [
+                            // Transfer Header Card
+                            FadeTransition(
+                              opacity: _slideAnimation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0, -0.3),
+                                  end: Offset.zero,
+                                ).animate(_slideAnimation),
+                                child: _buildTransferHeaderCard(
+                                  connectionStatus,
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(height: 24),
+
+                            // Smart Amount Input
+                            FadeTransition(
+                              opacity: _slideAnimation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(-0.3, 0),
+                                  end: Offset.zero,
+                                ).animate(_slideAnimation),
+                                child: _buildSmartAmountInput(),
+                              ),
+                            ),
+
+                            const SizedBox(height: 24),
+
+                            // Transfer Flow Visualization
+                            FadeTransition(
+                              opacity: _slideAnimation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0, 0.3),
+                                  end: Offset.zero,
+                                ).animate(_slideAnimation),
+                                child: _buildTransferFlowCard(
+                                  walletProvider,
+                                  userProvider,
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(height: 24),
+
+                            // Description Input
+                            FadeTransition(
+                              opacity: _slideAnimation,
+                              child: SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0.3, 0),
+                                  end: Offset.zero,
+                                ).animate(_slideAnimation),
+                                child: _buildDescriptionInput(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // Floating Submit Button
+                      _buildFloatingSubmitButton(
+                        transactionProvider,
+                        connectionStatus,
+                      ),
                     ],
-                  ),
-                ),
+                  );
+                },
               ),
-
-              // Main Content
-              Form(
-                key: _formKey,
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 100),
-                  children: [
-                    // Transfer Header Card
-                    FadeTransition(
-                      opacity: _slideAnimation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, -0.3),
-                          end: Offset.zero,
-                        ).animate(_slideAnimation),
-                        child: _buildTransferHeaderCard(),
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Smart Amount Input
-                    FadeTransition(
-                      opacity: _slideAnimation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(-0.3, 0),
-                          end: Offset.zero,
-                        ).animate(_slideAnimation),
-                        child: _buildSmartAmountInput(),
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Transfer Flow Visualization
-                    FadeTransition(
-                      opacity: _slideAnimation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.3),
-                          end: Offset.zero,
-                        ).animate(_slideAnimation),
-                        child: _buildTransferFlowCard(userProvider),
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Description Input
-                    FadeTransition(
-                      opacity: _slideAnimation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0.3, 0),
-                          end: Offset.zero,
-                        ).animate(_slideAnimation),
-                        child: _buildDescriptionInput(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Floating Submit Button
-              _buildFloatingSubmitButton(),
-            ],
-          );
-        },
-      ),
+            );
+          },
     );
   }
 
-  PreferredSizeWidget _buildAppBar() {
+  PreferredSizeWidget _buildAppBar(ConnectionStatusProvider connectionStatus) {
     return AppBar(
       elevation: 0,
       backgroundColor: Colors.transparent,
@@ -203,14 +229,82 @@ class _TransferScreenState extends State<TransferScreen>
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      title: const Text(
-        'Chuyển tiền',
-        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22),
+      title: Row(
+        children: [
+          const Text(
+            'Chuyển tiền',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22),
+          ),
+          const SizedBox(width: 12),
+          _buildConnectionStatusBadge(connectionStatus),
+        ],
       ),
     );
   }
 
-  Widget _buildTransferHeaderCard() {
+  Widget _buildConnectionStatusBadge(
+    ConnectionStatusProvider connectionStatus,
+  ) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: connectionStatus.isOnline
+            ? Colors.green.withOpacity(0.15)
+            : Colors.orange.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: connectionStatus.isOnline
+              ? Colors.green.withOpacity(0.3)
+              : Colors.orange.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (connectionStatus.isSyncing)
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  connectionStatus.isOnline
+                      ? Colors.green.shade700
+                      : Colors.orange.shade700,
+                ),
+              ),
+            )
+          else
+            Icon(
+              connectionStatus.isOnline
+                  ? Icons.wifi_rounded
+                  : Icons.wifi_off_rounded,
+              size: 14,
+              color: connectionStatus.isOnline
+                  ? Colors.green.shade700
+                  : Colors.orange.shade700,
+            ),
+          const SizedBox(width: 6),
+          Text(
+            connectionStatus.isSyncing
+                ? 'Syncing'
+                : (connectionStatus.isOnline ? 'Online' : 'Offline'),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: connectionStatus.isOnline
+                  ? Colors.green.shade800
+                  : Colors.orange.shade800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTransferHeaderCard(ConnectionStatusProvider connectionStatus) {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -254,6 +348,37 @@ class _TransferScreenState extends State<TransferScreen>
               fontSize: 14,
             ),
           ),
+
+          // Sync status indicator
+          if (!connectionStatus.isOnline) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.orange.withOpacity(0.4)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.wifi_off_rounded,
+                    color: Colors.white,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Chuyển tiền sẽ được lưu và đồng bộ khi có mạng',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.9),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -411,7 +536,10 @@ class _TransferScreenState extends State<TransferScreen>
     );
   }
 
-  Widget _buildTransferFlowCard(UserProvider userProvider) {
+  Widget _buildTransferFlowCard(
+    WalletProvider walletProvider,
+    UserProvider userProvider,
+  ) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -476,23 +604,25 @@ class _TransferScreenState extends State<TransferScreen>
           const SizedBox(height: 20),
 
           StreamBuilder<List<Wallet>>(
-            stream: _databaseService.getWalletsStream(userProvider),
+            stream: walletProvider.getWalletsStream(),
             builder: (context, snapshot) {
-              if (!snapshot.hasData) {
+              if (walletProvider.isLoading) {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              final wallets = snapshot.data!;
+              if (walletProvider.hasError) {
+                return _buildErrorState(
+                  walletProvider.error ?? 'Unknown error',
+                );
+              }
+
+              final wallets = walletProvider.wallets;
               final eligibleWallets = wallets
-                  .where(
-                    (w) =>
-                        w.ownerId == userProvider.currentUser!.uid ||
-                        w.ownerId == userProvider.partnershipId,
-                  )
+                  .where((w) => walletProvider.canEditWallet(w))
                   .toList();
 
               if (eligibleWallets.length < 2) {
-                return _buildInsufficientWalletsState();
+                return _buildInsufficientWalletsState(walletProvider);
               }
 
               return Column(
@@ -506,6 +636,7 @@ class _TransferScreenState extends State<TransferScreen>
                     icon: Icons.call_made_rounded,
                     color: Colors.red,
                     excludeWallet: _toWallet,
+                    userProvider: userProvider,
                   ),
 
                   const SizedBox(height: 20),
@@ -524,6 +655,7 @@ class _TransferScreenState extends State<TransferScreen>
                     icon: Icons.call_received_rounded,
                     color: Colors.green,
                     excludeWallet: _fromWallet,
+                    userProvider: userProvider,
                   ),
                 ],
               );
@@ -542,6 +674,7 @@ class _TransferScreenState extends State<TransferScreen>
     required IconData icon,
     required Color color,
     Wallet? excludeWallet,
+    required UserProvider userProvider,
   }) {
     final availableWallets = wallets.where((w) => w != excludeWallet).toList();
 
@@ -592,7 +725,7 @@ class _TransferScreenState extends State<TransferScreen>
             items: availableWallets.map((wallet) {
               return DropdownMenuItem<Wallet>(
                 value: wallet,
-                child: _buildWalletItem(wallet),
+                child: _buildWalletItem(wallet, userProvider),
               );
             }).toList(),
             onChanged: onChanged,
@@ -603,8 +736,7 @@ class _TransferScreenState extends State<TransferScreen>
     );
   }
 
-  Widget _buildWalletItem(Wallet wallet) {
-    final userProvider = Provider.of<UserProvider>(context, listen: false);
+  Widget _buildWalletItem(Wallet wallet, UserProvider userProvider) {
     String walletType = '';
     IconData walletIcon = Icons.account_balance_wallet_rounded;
     Color iconColor = Colors.blue;
@@ -695,7 +827,7 @@ class _TransferScreenState extends State<TransferScreen>
     );
   }
 
-  Widget _buildInsufficientWalletsState() {
+  Widget _buildInsufficientWalletsState(WalletProvider walletProvider) {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -727,9 +859,7 @@ class _TransferScreenState extends State<TransferScreen>
           ),
           const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: () {
-              // Navigate to add wallet screen
-            },
+            onPressed: () => _showCreateWalletDialog(walletProvider),
             icon: const Icon(Icons.add_rounded),
             label: const Text('Tạo ví mới'),
             style: ElevatedButton.styleFrom(
@@ -737,6 +867,79 @@ class _TransferScreenState extends State<TransferScreen>
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCreateWalletDialog(WalletProvider walletProvider) {
+    final nameController = TextEditingController();
+    final balanceController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Tạo ví mới'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(
+                labelText: 'Tên ví',
+                hintText: 'VD: Tiết kiệm, Đầu tư...',
+              ),
+              autofocus: true,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: balanceController,
+              decoration: const InputDecoration(
+                labelText: 'Số dư ban đầu (₫)',
+                hintText: '0',
+              ),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final name = nameController.text.trim();
+              if (name.isNotEmpty) {
+                try {
+                  final balance =
+                      double.tryParse(balanceController.text) ?? 0.0;
+
+                  await walletProvider.addWallet(
+                    name: name,
+                    initialBalance: balance,
+                  );
+
+                  Navigator.pop(context);
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Đã tạo ví "$name" thành công'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Lỗi khi tạo ví: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text('Tạo'),
           ),
         ],
       ),
@@ -870,7 +1073,10 @@ class _TransferScreenState extends State<TransferScreen>
     );
   }
 
-  Widget _buildFloatingSubmitButton() {
+  Widget _buildFloatingSubmitButton(
+    TransactionProvider transactionProvider,
+    ConnectionStatusProvider connectionStatus,
+  ) {
     return Positioned(
       left: 20,
       right: 20,
@@ -895,7 +1101,9 @@ class _TransferScreenState extends State<TransferScreen>
             ],
           ),
           child: ElevatedButton(
-            onPressed: _isLoading ? null : _submitTransfer,
+            onPressed: _isLoading
+                ? null
+                : () => _submitTransfer(transactionProvider, connectionStatus),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.transparent,
               shadowColor: Colors.transparent,
@@ -955,7 +1163,10 @@ class _TransferScreenState extends State<TransferScreen>
     );
   }
 
-  Future<void> _submitTransfer() async {
+  Future<void> _submitTransfer(
+    TransactionProvider transactionProvider,
+    ConnectionStatusProvider connectionStatus,
+  ) async {
     if (!_formKey.currentState!.validate()) return;
 
     if (_fromWallet == null || _toWallet == null) {
@@ -1018,46 +1229,64 @@ class _TransferScreenState extends State<TransferScreen>
           ? 'Chuyển tiền'
           : _descriptionController.text.trim();
 
-      await _databaseService.addTransferTransaction(
-        fromWalletId: _fromWallet!.id,
-        toWalletId: _toWallet!.id,
+      // Create transfer transaction using TransactionProvider
+      final transferTransaction = TransactionModel(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
         amount: amount,
+        type: TransactionType.transfer,
+        walletId: _fromWallet!.id,
+        transferToWalletId: _toWallet!.id,
+        date: DateTime.now(),
         description: description,
-        fromWalletName: _fromWallet!.name,
-        toWalletName: _toWallet!.name,
+        userId: FirebaseAuth.instance.currentUser!.uid,
+        walletName: _fromWallet!.name,
+        transferFromWalletName: _fromWallet!.name,
+        transferToWalletName: _toWallet!.name,
       );
 
-      if (mounted) {
-        // Success animation and navigation
-        await _showSuccessAnimation();
+      final success = await transactionProvider.addTransaction(
+        transferTransaction,
+      );
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(
-                  Icons.check_circle_rounded,
-                  color: Colors.white,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Chuyển ${NumberFormat.currency(locale: 'vi_VN', symbol: '₫').format(amount)} thành công!',
+      if (success) {
+        if (mounted) {
+          // Success animation and navigation
+          await _showSuccessAnimation();
+
+          final syncMessage = connectionStatus.isOnline
+              ? 'Chuyển tiền thành công và đã đồng bộ!'
+              : 'Chuyển tiền thành công (sẽ đồng bộ khi có mạng)';
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(
+                    connectionStatus.isOnline
+                        ? Icons.check_circle_rounded
+                        : Icons.cloud_off_rounded,
+                    color: Colors.white,
+                    size: 20,
                   ),
-                ),
-              ],
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(syncMessage)),
+                ],
+              ),
+              backgroundColor: connectionStatus.isOnline
+                  ? Colors.green
+                  : Colors.orange,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              margin: const EdgeInsets.all(16),
             ),
-            backgroundColor: Colors.green,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
+          );
 
-        Navigator.pop(context);
+          Navigator.pop(context);
+        }
+      } else {
+        throw Exception('Failed to create transfer transaction');
       }
     } catch (e) {
       if (mounted) {
@@ -1141,6 +1370,50 @@ class _TransferScreenState extends State<TransferScreen>
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState(String error) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.red.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.error_outline, color: Colors.red.shade600, size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                'Không thể tải danh sách ví',
+                style: TextStyle(fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Vui lòng kiểm tra kết nối mạng và thử lại',
+            style: TextStyle(fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: () {
+              setState(() {});
+            },
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            label: const Text('Thử lại'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            ),
+          ),
+        ],
       ),
     );
   }
