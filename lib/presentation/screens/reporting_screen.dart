@@ -652,7 +652,7 @@ class _IncomeReportTab extends StatelessWidget {
             .toList();
 
         if (transactions.isEmpty) {
-          return const _ExpenseReportTab(
+          return _ExpenseReportTab(
             startDate: DateTime.now(),
             endDate: DateTime.now(),
             onRefresh: _dummyRefresh,
