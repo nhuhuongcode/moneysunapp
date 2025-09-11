@@ -247,6 +247,34 @@ class DataService extends ChangeNotifier {
         )
       ''');
 
+      await txn.execute('''
+        CREATE TABLE budgets (
+          id TEXT PRIMARY KEY,
+          firebase_id TEXT UNIQUE,
+          owner_id TEXT NOT NULL,
+          month TEXT NOT NULL,
+          total_amount REAL NOT NULL DEFAULT 0,
+          category_amounts TEXT DEFAULT '{}',
+          budget_type TEXT DEFAULT 'personal' CHECK (budget_type IN ('personal', 'shared')),
+          period TEXT DEFAULT 'monthly' CHECK (period IN ('weekly', 'monthly', 'quarterly', 'yearly', 'custom')),
+          created_by TEXT,
+          start_date INTEGER,
+          end_date INTEGER,
+          is_active INTEGER DEFAULT 1,
+          notes TEXT,
+          category_limits TEXT,
+          is_deleted INTEGER DEFAULT 0,
+          
+          sync_status INTEGER DEFAULT 0,
+          version INTEGER DEFAULT 1,
+          
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+          
+          UNIQUE(owner_id, month, budget_type)
+        )
+      ''');
+
       // Create indexes
       await _createIndexes(txn);
 
@@ -265,6 +293,9 @@ class DataService extends ChangeNotifier {
       'CREATE INDEX idx_wallets_owner ON wallets(owner_id)',
       'CREATE INDEX idx_categories_owner_type ON categories(owner_id, type)',
       'CREATE INDEX idx_sync_queue_priority ON sync_queue(priority DESC, scheduled_at ASC)',
+      'CREATE INDEX idx_budgets_owner_month ON budgets(owner_id, month DESC)',
+      'CREATE INDEX idx_budgets_sync ON budgets(sync_status)',
+      'CREATE INDEX idx_budgets_type ON budgets(budget_type)',
     ];
 
     for (final index in indexes) {
@@ -1181,6 +1212,570 @@ class DataService extends ChangeNotifier {
     });
   }
 
+  Future<List<Budget>> getBudgets({
+    BudgetType? budgetType,
+    String? month,
+    bool includeDeleted = false,
+  }) async {
+    if (!isInitialized || _localDatabase == null || currentUserId == null) {
+      return [];
+    }
+
+    try {
+      String whereClause = 'owner_id = ?';
+      List<dynamic> whereArgs = [currentUserId];
+
+      // Include partnership budgets if user has partnership
+      if (partnershipId != null) {
+        whereClause = '(owner_id = ? OR owner_id = ?)';
+        whereArgs = [currentUserId, partnershipId!];
+      }
+
+      // Budget type filter
+      if (budgetType != null) {
+        whereClause += ' AND budget_type = ?';
+        whereArgs.add(budgetType.name);
+      }
+
+      // Month filter
+      if (month != null) {
+        whereClause += ' AND month = ?';
+        whereArgs.add(month);
+      }
+
+      // Exclude deleted budgets unless requested
+      if (!includeDeleted) {
+        whereClause += ' AND is_deleted = 0';
+      }
+
+      final result = await _localDatabase!.query(
+        'budgets',
+        where: whereClause,
+        whereArgs: whereArgs,
+        orderBy: 'month DESC, created_at DESC',
+      );
+
+      final budgets = result.map((map) => _budgetFromMap(map)).toList();
+
+      // Background refresh if needed and online
+      if (isOnline && budgets.isNotEmpty) {
+        unawaited(_refreshBudgetsIfNeeded());
+      }
+
+      return budgets;
+    } catch (e) {
+      debugPrint('❌ Error getting budgets: $e');
+      return [];
+    }
+  }
+
+  /// Add new budget with offline-first support
+  Future<void> addBudget({
+    required String month,
+    required double totalAmount,
+    required Map<String, double> categoryAmounts,
+    BudgetType budgetType = BudgetType.personal,
+    BudgetPeriod period = BudgetPeriod.monthly,
+    String? ownerId,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    if (!isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    final budgetId =
+        'budget_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(9999)}';
+    final finalOwnerId = ownerId ?? _getCurrentOwnerId(budgetType);
+
+    await _localDatabase!.transaction((txn) async {
+      await txn.insert('budgets', {
+        'id': budgetId,
+        'owner_id': finalOwnerId,
+        'month': month,
+        'total_amount': totalAmount,
+        'category_amounts': jsonEncode(categoryAmounts),
+        'budget_type': budgetType.name,
+        'period': period.name,
+        'start_date': startDate?.millisecondsSinceEpoch,
+        'end_date': endDate?.millisecondsSinceEpoch,
+        'created_by': currentUserId,
+        'is_active': 1,
+        'is_deleted': 0,
+        'sync_status': 0, // Unsynced
+        'version': 1,
+      });
+
+      await _addToSyncQueue(txn, 'budgets', budgetId, 'INSERT', {
+        'ownerId': finalOwnerId,
+        'month': month,
+        'totalAmount': totalAmount,
+        'categoryAmounts': categoryAmounts,
+        'budgetType': budgetType.name,
+        'period': period.name,
+        'startDate': startDate?.millisecondsSinceEpoch,
+        'endDate': endDate?.millisecondsSinceEpoch,
+        'createdBy': currentUserId,
+      }, priority: 2);
+    });
+
+    if (isOnline) {
+      unawaited(_syncSingleRecord('budgets', budgetId));
+    }
+
+    notifyListeners();
+  }
+
+  /// Update budget with offline-first support
+  Future<void> updateBudget(Budget budget) async {
+    if (!isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    await _localDatabase!.transaction((txn) async {
+      await txn.update(
+        'budgets',
+        {
+          'month': budget.month,
+          'total_amount': budget.totalAmount,
+          'category_amounts': jsonEncode(budget.categoryAmounts),
+          'budget_type': budget.budgetType.name,
+          'period': budget.period.name,
+          'start_date': budget.startDate?.millisecondsSinceEpoch,
+          'end_date': budget.endDate?.millisecondsSinceEpoch,
+          'is_active': budget.isActive ? 1 : 0,
+          'notes': budget.notes != null ? jsonEncode(budget.notes) : null,
+          'category_limits': budget.categoryLimits != null
+              ? jsonEncode(budget.categoryLimits)
+              : null,
+          'sync_status': 0, // Mark as unsynced
+          'version': budget.version + 1,
+          'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [budget.id],
+      );
+
+      await _addToSyncQueue(
+        txn,
+        'budgets',
+        budget.id,
+        'UPDATE',
+        budget.toJson(),
+        priority: 2,
+      );
+    });
+
+    if (isOnline) {
+      unawaited(_syncSingleRecord('budgets', budget.id));
+    }
+
+    notifyListeners();
+  }
+
+  /// Delete budget with offline-first support
+  Future<void> deleteBudget(String budgetId) async {
+    if (!isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    await _localDatabase!.transaction((txn) async {
+      // Soft delete
+      await txn.update(
+        'budgets',
+        {
+          'is_deleted': 1,
+          'sync_status': 0,
+          'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [budgetId],
+      );
+
+      await _addToSyncQueue(txn, 'budgets', budgetId, 'DELETE', {
+        'id': budgetId,
+      }, priority: 2);
+    });
+
+    if (isOnline) {
+      unawaited(_syncSingleRecord('budgets', budgetId));
+    }
+
+    notifyListeners();
+  }
+
+  /// Set category budget amount
+  Future<void> setCategoryBudget(
+    String budgetId,
+    String categoryId,
+    double amount,
+  ) async {
+    if (!isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    // Get current budget
+    final budgetResult = await _localDatabase!.query(
+      'budgets',
+      where: 'id = ?',
+      whereArgs: [budgetId],
+      limit: 1,
+    );
+
+    if (budgetResult.isEmpty) {
+      throw Exception('Budget not found');
+    }
+
+    final budgetData = budgetResult.first;
+    final categoryAmounts = Map<String, double>.from(
+      jsonDecode(budgetData['category_amounts'] as String),
+    );
+
+    // Update category amount
+    if (amount > 0) {
+      categoryAmounts[categoryId] = amount;
+    } else {
+      categoryAmounts.remove(categoryId);
+    }
+
+    // Calculate new total amount
+    final newTotalAmount = categoryAmounts.values.fold(
+      0.0,
+      (sum, val) => sum + val,
+    );
+
+    await _localDatabase!.transaction((txn) async {
+      await txn.update(
+        'budgets',
+        {
+          'category_amounts': jsonEncode(categoryAmounts),
+          'total_amount': newTotalAmount,
+          'sync_status': 0,
+          'version': (budgetData['version'] as int) + 1,
+          'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [budgetId],
+      );
+
+      await _addToSyncQueue(txn, 'budgets', budgetId, 'UPDATE', {
+        'categoryAmounts': categoryAmounts,
+        'totalAmount': newTotalAmount,
+      }, priority: 2);
+    });
+
+    if (isOnline) {
+      unawaited(_syncSingleRecord('budgets', budgetId));
+    }
+
+    notifyListeners();
+  }
+
+  /// Copy budget from another month
+  Future<void> copyBudgetFromMonth(
+    String sourceMonth,
+    String targetMonth,
+    BudgetType budgetType,
+  ) async {
+    if (!isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    // Find source budget
+    final sourceBudgets = await _localDatabase!.query(
+      'budgets',
+      where:
+          'month = ? AND budget_type = ? AND owner_id = ? AND is_deleted = 0',
+      whereArgs: [sourceMonth, budgetType.name, _getCurrentOwnerId(budgetType)],
+      limit: 1,
+    );
+
+    if (sourceBudgets.isEmpty) {
+      throw Exception('Source budget not found');
+    }
+
+    final sourceBudget = sourceBudgets.first;
+    final categoryAmounts = Map<String, double>.from(
+      jsonDecode(sourceBudget['category_amounts'] as String),
+    );
+
+    // Create new budget for target month
+    await addBudget(
+      month: targetMonth,
+      totalAmount: sourceBudget['total_amount'] as double,
+      categoryAmounts: categoryAmounts,
+      budgetType: budgetType,
+      period: BudgetPeriod.values.firstWhere(
+        (e) => e.name == sourceBudget['period'],
+        orElse: () => BudgetPeriod.monthly,
+      ),
+    );
+  }
+
+  /// Get budget analytics
+  Future<BudgetAnalytics> getBudgetAnalytics(String budgetId) async {
+    if (!isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    // Get budget data
+    final budgetResult = await _localDatabase!.query(
+      'budgets',
+      where: 'id = ?',
+      whereArgs: [budgetId],
+      limit: 1,
+    );
+
+    if (budgetResult.isEmpty) {
+      throw Exception('Budget not found');
+    }
+
+    final budget = _budgetFromMap(budgetResult.first);
+
+    // Get transactions for this budget period
+    final (startDate, endDate) = budget.effectiveDateRange;
+    final transactions = await getTransactions(
+      startDate: startDate,
+      endDate: endDate,
+    );
+
+    // Calculate analytics
+    double totalSpent = 0;
+    final categorySpending = <String, double>{};
+
+    for (final transaction in transactions) {
+      if (transaction.type == TransactionType.expense &&
+          transaction.categoryId != null) {
+        totalSpent += transaction.amount;
+        categorySpending[transaction.categoryId!] =
+            (categorySpending[transaction.categoryId!] ?? 0) +
+            transaction.amount;
+      }
+    }
+
+    // Build category analytics
+    final categoryAnalytics = <String, CategoryBudgetAnalytics>{};
+    for (final entry in budget.categoryAmounts.entries) {
+      final categoryId = entry.key;
+      final budgetAmount = entry.value;
+      final spentAmount = categorySpending[categoryId] ?? 0;
+      final remainingAmount = budgetAmount - spentAmount;
+      final spentPercentage = budgetAmount > 0
+          ? (spentAmount / budgetAmount * 100)
+          : 0;
+
+      categoryAnalytics[categoryId] = CategoryBudgetAnalytics(
+        categoryId: categoryId,
+        categoryName:
+            'Category $categoryId', // Would need to fetch from categories table
+        budgetAmount: budgetAmount,
+        spentAmount: spentAmount,
+        remainingAmount: remainingAmount,
+        spentPercentage: spentPercentage as double,
+        isOverBudget: spentAmount > budgetAmount,
+        isNearLimit: spentPercentage >= 80,
+        dailySpending: [], // Would need to calculate daily breakdown
+      );
+    }
+
+    final totalRemaining = budget.totalAmount - totalSpent;
+    final spentPercentage = budget.totalAmount > 0
+        ? (totalSpent / budget.totalAmount * 100)
+        : 0;
+
+    return BudgetAnalytics(
+      budgetId: budgetId,
+      totalBudget: budget.totalAmount,
+      totalSpent: totalSpent,
+      totalRemaining: totalRemaining,
+      spentPercentage: spentPercentage as double,
+      categoryAnalytics: categoryAnalytics,
+      alerts: [], // Would generate based on thresholds
+      trend: BudgetTrend(
+        direction: BudgetTrendDirection.stable,
+        changePercentage: 0,
+        description: 'Stable spending',
+        monthlySpending: [],
+      ),
+    );
+  }
+
+  // ============ STREAM METHODS FOR UI ============
+
+  /// Get budgets stream for real-time updates
+  Stream<List<Budget>> getBudgetsStream({
+    BudgetType? budgetType,
+    String? month,
+    bool includeDeleted = false,
+  }) async* {
+    yield await getBudgets(
+      budgetType: budgetType,
+      month: month,
+      includeDeleted: includeDeleted,
+    );
+
+    await for (final _ in Stream.periodic(const Duration(seconds: 2))) {
+      yield await getBudgets(
+        budgetType: budgetType,
+        month: month,
+        includeDeleted: includeDeleted,
+      );
+    }
+  }
+
+  // ============ SYNC OPERATIONS ============
+
+  Future<void> _syncBudgetToFirebase(
+    String recordId,
+    String operation,
+    Map<String, dynamic> data,
+  ) async {
+    final budgetRef = _firebaseRef.child('budgets').child(recordId);
+
+    switch (operation) {
+      case 'INSERT':
+      case 'UPDATE':
+        await budgetRef.set({...data, 'updatedAt': ServerValue.timestamp});
+        break;
+      case 'DELETE':
+        await budgetRef.remove();
+        break;
+    }
+
+    // Mark as synced in local database
+    await _localDatabase!.update(
+      'budgets',
+      {'sync_status': 1, 'firebase_id': recordId},
+      where: 'id = ?',
+      whereArgs: [recordId],
+    );
+  }
+
+  Future<void> _downloadBudgetsFromFirebase(int? lastSyncTimestamp) async {
+    try {
+      Query query = _firebaseRef
+          .child('budgets')
+          .orderByChild('ownerId')
+          .equalTo(currentUserId);
+
+      final snapshot = await query.get();
+      if (!snapshot.exists) return;
+
+      final budgetsMap = snapshot.value as Map<dynamic, dynamic>;
+
+      await _localDatabase!.transaction((txn) async {
+        for (final entry in budgetsMap.entries) {
+          final firebaseId = entry.key as String;
+          final firebaseData = entry.value as Map<dynamic, dynamic>;
+
+          final localRecords = await txn.query(
+            'budgets',
+            where: 'firebase_id = ? OR id = ?',
+            whereArgs: [firebaseId, firebaseData['id']],
+            limit: 1,
+          );
+
+          if (localRecords.isEmpty) {
+            await _insertBudgetFromFirebase(txn, firebaseId, firebaseData);
+          }
+        }
+      });
+
+      debugPrint('✅ Downloaded budgets from Firebase');
+    } catch (e) {
+      debugPrint('❌ Error downloading budgets: $e');
+    }
+  }
+
+  Future<void> _insertBudgetFromFirebase(
+    Transaction txn,
+    String firebaseId,
+    Map<dynamic, dynamic> firebaseData,
+  ) async {
+    await txn.insert('budgets', {
+      'id': firebaseData['id'] ?? firebaseId,
+      'firebase_id': firebaseId,
+      'owner_id': firebaseData['ownerId'] ?? '',
+      'month': firebaseData['month'] ?? '',
+      'total_amount': (firebaseData['totalAmount'] ?? 0).toDouble(),
+      'category_amounts': jsonEncode(firebaseData['categoryAmounts'] ?? {}),
+      'budget_type': firebaseData['budgetType'] ?? 'personal',
+      'period': firebaseData['period'] ?? 'monthly',
+      'start_date': firebaseData['startDate'],
+      'end_date': firebaseData['endDate'],
+      'created_by': firebaseData['createdBy'],
+      'is_active': firebaseData['isActive'] == true ? 1 : 0,
+      'is_deleted': firebaseData['isDeleted'] == true ? 1 : 0,
+      'notes': firebaseData['notes'] != null
+          ? jsonEncode(firebaseData['notes'])
+          : null,
+      'category_limits': firebaseData['categoryLimits'] != null
+          ? jsonEncode(firebaseData['categoryLimits'])
+          : null,
+      'sync_status': 1, // Synced
+      'version': firebaseData['version'] ?? 1,
+    });
+  }
+
+  Future<void> _refreshBudgetsIfNeeded() async {
+    // Background refresh logic
+    if (lastSyncTime == null ||
+        DateTime.now().difference(lastSyncTime!).inMinutes > 5) {
+      unawaited(_performIntelligentSync());
+    }
+  }
+
+  // ============ HELPER METHODS ============
+
+  Budget _budgetFromMap(Map<String, dynamic> map) {
+    return Budget(
+      id: map['id'],
+      ownerId: map['owner_id'],
+      month: map['month'],
+      totalAmount: (map['total_amount'] as num).toDouble(),
+      categoryAmounts: Map<String, double>.from(
+        jsonDecode(map['category_amounts'] ?? '{}'),
+      ),
+      budgetType: BudgetType.values.firstWhere(
+        (e) => e.name == (map['budget_type'] ?? 'personal'),
+        orElse: () => BudgetType.personal,
+      ),
+      period: BudgetPeriod.values.firstWhere(
+        (e) => e.name == (map['period'] ?? 'monthly'),
+        orElse: () => BudgetPeriod.monthly,
+      ),
+      createdBy: map['created_by'],
+      createdAt: map['created_at'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['created_at'] * 1000)
+          : null,
+      updatedAt: map['updated_at'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['updated_at'] * 1000)
+          : null,
+      startDate: map['start_date'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['start_date'])
+          : null,
+      endDate: map['end_date'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['end_date'])
+          : null,
+      isActive: (map['is_active'] ?? 1) == 1,
+      isDeleted: (map['is_deleted'] ?? 0) == 1,
+      notes: map['notes'] != null
+          ? Map<String, String>.from(jsonDecode(map['notes']))
+          : null,
+      categoryLimits: map['category_limits'] != null
+          ? Map<String, double>.from(jsonDecode(map['category_limits']))
+          : null,
+      version: map['version'] ?? 1,
+    );
+  }
+
+  String _getCurrentOwnerId(BudgetType budgetType) {
+    if (budgetType == BudgetType.shared && partnershipId != null) {
+      return partnershipId!;
+    }
+    return currentUserId ?? '';
+  }
+
   @override
   void dispose() {
     _connectivitySubscription?.cancel();
@@ -1188,4 +1783,28 @@ class DataService extends ChangeNotifier {
     _localDatabase?.close();
     super.dispose();
   }
+}
+
+class ReportData {
+  final double totalIncome;
+  final double totalExpense;
+  final double personalIncome;
+  final double personalExpense;
+  final double sharedIncome;
+  final double sharedExpense;
+  final Map<String, double> expenseByCategory; // Simplified to String keys
+  final Map<String, double> incomeByCategory; // Simplified to String keys
+  final List<TransactionModel> rawTransactions;
+
+  ReportData({
+    this.totalIncome = 0.0,
+    this.totalExpense = 0.0,
+    required this.expenseByCategory,
+    required this.incomeByCategory,
+    required this.rawTransactions,
+    this.personalIncome = 0.0,
+    this.personalExpense = 0.0,
+    this.sharedIncome = 0.0,
+    this.sharedExpense = 0.0,
+  });
 }

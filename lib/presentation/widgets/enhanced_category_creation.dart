@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
-import 'package:moneysun/data/services/enhanced_category_service.dart';
+import 'package:moneysun/data/services/category_service.dart';
 import 'package:moneysun/presentation/widgets/category_ownership_selector.dart';
 
 // ============ ENHANCED CATEGORY CREATION DIALOG ============
@@ -28,7 +28,7 @@ class EnhancedCategoryCreationDialog extends StatefulWidget {
 class _EnhancedCategoryCreationDialogState
     extends State<EnhancedCategoryCreationDialog> {
   final _nameController = TextEditingController();
-  final _categoryService = EnhancedCategoryService();
+  final _categoryService = CategoryService();
 
   late CategoryOwnershipType _selectedOwnership;
   int? _selectedIconCodePoint;
@@ -757,8 +757,7 @@ class CategoryQuickCreateWidget extends StatelessWidget {
 
 // ============ DEFAULT CATEGORIES CREATOR ============
 class DefaultCategoriesCreator {
-  static final EnhancedCategoryService _categoryService =
-      EnhancedCategoryService();
+  static final CategoryService _categoryService = CategoryService();
 
   static Future<void> createDefaultCategories(
     UserProvider userProvider, {
