@@ -420,3 +420,144 @@ double parseAmount(String text) {
   String cleaned = text.replaceAll(RegExp(r'[^\d.]'), '');
   return double.tryParse(cleaned) ?? 0;
 }
+
+class AmountDisplayWidget extends StatelessWidget {
+  final double amount;
+  final String currency;
+  final TextStyle? style;
+  final bool showCurrency;
+  final bool isNegative;
+  final Color? positiveColor;
+  final Color? negativeColor;
+
+  const AmountDisplayWidget({
+    super.key,
+    required this.amount,
+    this.currency = 'VND',
+    this.style,
+    this.showCurrency = true,
+    this.isNegative = false,
+    this.positiveColor,
+    this.negativeColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final displayAmount = isNegative ? -amount.abs() : amount.abs();
+    final formatted = _formatAmount(displayAmount);
+
+    Color textColor;
+    if (displayAmount < 0) {
+      textColor = negativeColor ?? Colors.red;
+    } else if (displayAmount > 0) {
+      textColor = positiveColor ?? Colors.green;
+    } else {
+      textColor = Colors.grey;
+    }
+
+    return Text(
+      '$formatted${showCurrency ? ' ${_getCurrencySymbol()}' : ''}',
+      style: (style ?? const TextStyle()).copyWith(
+        color: textColor,
+        fontWeight: FontWeight.bold,
+      ),
+    );
+  }
+
+  String _formatAmount(double amount) {
+    switch (currency) {
+      case 'VND':
+        return NumberFormat('#,###', 'vi_VN').format(amount);
+      case 'USD':
+        return NumberFormat.currency(
+          locale: 'en_US',
+          symbol: '',
+          decimalDigits: 2,
+        ).format(amount);
+      case 'EUR':
+        return NumberFormat.currency(
+          locale: 'de_DE',
+          symbol: '',
+          decimalDigits: 2,
+        ).format(amount);
+      default:
+        return NumberFormat('#,###').format(amount);
+    }
+  }
+
+  String _getCurrencySymbol() {
+    switch (currency) {
+      case 'VND':
+        return '₫';
+      case 'USD':
+        return '\$';
+      case 'EUR':
+        return '€';
+      default:
+        return '';
+    }
+  }
+}
+
+// ============ AMOUNT COMPARISON WIDGET ============
+class AmountComparisonWidget extends StatelessWidget {
+  final double currentAmount;
+  final double? previousAmount;
+  final String currency;
+  final bool showPercentage;
+
+  const AmountComparisonWidget({
+    super.key,
+    required this.currentAmount,
+    this.previousAmount,
+    this.currency = 'VND',
+    this.showPercentage = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (previousAmount == null || previousAmount == 0) {
+      return AmountDisplayWidget(amount: currentAmount, currency: currency);
+    }
+
+    final difference = currentAmount - previousAmount!;
+    final percentageChange = (difference / previousAmount!.abs()) * 100;
+    final isIncrease = difference > 0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        AmountDisplayWidget(amount: currentAmount, currency: currency),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Icon(
+              isIncrease ? Icons.trending_up : Icons.trending_down,
+              size: 16,
+              color: isIncrease ? Colors.green : Colors.red,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '${isIncrease ? '+' : ''}${NumberFormat('#,###', 'vi_VN').format(difference.abs())}',
+              style: TextStyle(
+                fontSize: 12,
+                color: isIncrease ? Colors.green : Colors.red,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (showPercentage) ...[
+              const SizedBox(width: 4),
+              Text(
+                '(${isIncrease ? '+' : ''}${percentageChange.toStringAsFixed(1)}%)',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isIncrease ? Colors.green : Colors.red,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+}

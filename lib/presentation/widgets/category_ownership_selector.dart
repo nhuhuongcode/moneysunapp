@@ -369,6 +369,7 @@ class CategoryCreationDialog extends StatefulWidget {
     required this.type,
     required this.userProvider,
     required this.onCreated,
+    CategoryOwnershipType? defaultOwnershipType,
   });
 
   @override
