@@ -91,6 +91,7 @@ class DataService extends ChangeNotifier {
     } catch (e) {
       _lastError = 'Initialization failed: $e';
       debugPrint('❌ DataService initialization failed: $e');
+      _isInitialized = true;
       notifyListeners();
       rethrow;
     }
@@ -107,18 +108,40 @@ class DataService extends ChangeNotifier {
         version: 2,
         onCreate: _createDatabaseTables,
         onUpgrade: _upgradeDatabase,
-        onOpen: (db) async {
-          await db.execute('PRAGMA foreign_keys = ON');
-          await db.execute('PRAGMA journal_mode = WAL');
-          await db.execute('PRAGMA cache_size = 20000');
-          await db.execute('PRAGMA synchronous = NORMAL');
-        },
+        onOpen: _onDatabaseOpen,
       );
 
       debugPrint('✅ Database initialized: $path');
     } catch (e) {
       debugPrint('❌ Database initialization failed: $e');
       rethrow;
+    }
+  }
+
+  // FIXED: Separate onOpen handler with proper PRAGMA setup
+  Future<void> _onDatabaseOpen(Database db) async {
+    try {
+      debugPrint('🔧 Setting up database PRAGMA...');
+
+      // FIXED: Use rawQuery instead of execute for PRAGMA statements
+      await db.rawQuery('PRAGMA foreign_keys = ON');
+      debugPrint('✅ Foreign keys enabled');
+
+      await db.rawQuery('PRAGMA journal_mode = WAL');
+      debugPrint('✅ WAL mode enabled');
+
+      await db.rawQuery('PRAGMA cache_size = 20000');
+      debugPrint('✅ Cache size set');
+
+      await db.rawQuery('PRAGMA synchronous = NORMAL');
+      debugPrint('✅ Synchronous mode set');
+
+      debugPrint('✅ All PRAGMA settings applied successfully');
+    } catch (e) {
+      debugPrint(
+        '⚠️ PRAGMA setup failed, continuing with default settings: $e',
+      );
+      // Don't rethrow - database can work without these optimizations
     }
   }
 
@@ -279,7 +302,7 @@ class DataService extends ChangeNotifier {
       await _createIndexes(txn);
 
       // Create triggers
-      await _createTriggers(txn);
+      // await _createTriggers(txn);
     });
 
     debugPrint('✅ Database tables created successfully');
@@ -548,41 +571,63 @@ class DataService extends ChangeNotifier {
     bool isVisibleToPartner = true,
     String? ownerId,
   }) async {
-    if (!_isInitialized || _localDatabase == null) {
+    if (!_isInitialized) {
+      debugPrint('❌ DataService not initialized, attempting to initialize...');
       throw Exception('Service not initialized');
+      if (_userProvider != null) {
+        await initialize(_userProvider!);
+      } else {
+        throw Exception('UserProvider not set, cannot initialize DataService');
+      }
+    }
+
+    if (_localDatabase == null) {
+      throw Exception(' localDatabase is null, cannot add wallet');
     }
 
     final walletId =
         'wallet_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(9999)}';
-    final finalOwnerId = ownerId ?? currentUserId!;
+    final finalOwnerId = ownerId ?? currentUserId;
 
-    await _localDatabase!.transaction((txn) async {
-      await txn.insert('wallets', {
-        'id': walletId,
-        'name': name,
-        'balance': initialBalance,
-        'owner_id': finalOwnerId,
-        'is_visible_to_partner': isVisibleToPartner ? 1 : 0,
-        'wallet_type': type.name,
-        'currency': 'VND',
-        'sync_status': 0, // Unsynced
-        'version': 1,
-      });
-
-      await _addToSyncQueue(txn, 'wallets', walletId, 'INSERT', {
-        'name': name,
-        'balance': initialBalance,
-        'ownerId': finalOwnerId,
-        'isVisibleToPartner': isVisibleToPartner,
-        'type': type.name,
-      }, priority: 2);
-    });
-
-    if (_isOnline) {
-      unawaited(_syncSingleRecord('wallets', walletId));
+    if (finalOwnerId == null) {
+      throw Exception('No valid owner ID available');
     }
 
-    notifyListeners();
+    try {
+      debugPrint('➕ Adding wallet: $name');
+
+      await _localDatabase!.transaction((txn) async {
+        await txn.insert('wallets', {
+          'id': walletId,
+          'name': name,
+          'balance': initialBalance,
+          'owner_id': finalOwnerId,
+          'is_visible_to_partner': isVisibleToPartner ? 1 : 0,
+          'wallet_type': type.name,
+          'currency': 'VND',
+          'sync_status': 0, // Unsynced
+          'version': 1,
+        });
+
+        await _addToSyncQueue(txn, 'wallets', walletId, 'INSERT', {
+          'name': name,
+          'balance': initialBalance,
+          'ownerId': finalOwnerId,
+          'isVisibleToPartner': isVisibleToPartner,
+          'type': type.name,
+        }, priority: 2);
+      });
+
+      if (_isOnline) {
+        unawaited(_syncSingleRecord('wallets', walletId));
+      }
+
+      notifyListeners();
+      debugPrint('✅ Wallet added: $name');
+    } catch (e) {
+      debugPrint('❌ Error adding wallet: $e');
+      rethrow;
+    }
   }
 
   /// Get categories with offline-first support
