@@ -1,20 +1,27 @@
-// lib/presentation/screens/add_transaction_screen_.dart
+// lib/presentation/screens/add_transaction_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+
+// Models
 import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
+
+// Providers
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/providers/wallet_provider.dart';
 import 'package:moneysun/data/providers/category_provider.dart';
 import 'package:moneysun/data/providers/transaction_provider.dart';
 import 'package:moneysun/data/providers/connection_status_provider.dart';
-import 'package:moneysun/presentation/screens/transfer_screen.dart';
-import 'package:moneysun/presentation/widgets/category_ownership_selector.dart';
+
+// Widgets
 import 'package:moneysun/presentation/widgets/smart_amount_input.dart';
 import 'package:moneysun/presentation/widgets/enhanced_category_creation.dart';
-import 'package:provider/provider.dart';
+
+// Screens
+import 'package:moneysun/presentation/screens/transfer_screen.dart';
 
 class AddTransactionScreen extends StatefulWidget {
   final TransactionModel? transactionToEdit;
@@ -27,53 +34,65 @@ class AddTransactionScreen extends StatefulWidget {
 
 class _AddTransactionScreenState extends State<AddTransactionScreen>
     with TickerProviderStateMixin {
+  // Form and Controllers
   final _formKey = GlobalKey<FormState>();
   final _amountController = TextEditingController();
   final _descriptionController = TextEditingController();
 
-  // Transaction type animation
-  late AnimationController _typeAnimationController;
-  late Animation<double> _typeAnimation;
+  // Animation Controllers
+  late AnimationController _fadeAnimationController;
+  late Animation<double> _fadeAnimation;
 
+  // Form State
   TransactionType _selectedType = TransactionType.expense;
   String? _selectedWalletId;
   String? _selectedCategoryId;
   String? _selectedSubCategoryId;
   DateTime _selectedDate = DateTime.now();
 
+  // UI State
   bool _isLoading = false;
+  bool _isInitialized = false;
   List<String> _descriptionHistory = [];
 
   @override
   void initState() {
     super.initState();
-
-    // Initialize animations
-    _typeAnimationController = AnimationController(
-      duration: const Duration(milliseconds: 300),
-      vsync: this,
-    );
-    _typeAnimation = CurvedAnimation(
-      parent: _typeAnimationController,
-      curve: Curves.easeInOut,
-    );
-
-    _loadDescriptionHistory();
-
-    if (widget.transactionToEdit != null) {
-      _populateFieldsForEdit();
-    }
-
-    // Start animation
-    _typeAnimationController.forward();
+    _initializeAnimations();
+    _loadInitialData();
   }
 
   @override
   void dispose() {
-    _typeAnimationController.dispose();
+    _fadeAnimationController.dispose();
     _amountController.dispose();
     _descriptionController.dispose();
     super.dispose();
+  }
+
+  void _initializeAnimations() {
+    _fadeAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _fadeAnimation = CurvedAnimation(
+      parent: _fadeAnimationController,
+      curve: Curves.easeInOut,
+    );
+  }
+
+  void _loadInitialData() {
+    if (widget.transactionToEdit != null) {
+      _populateFieldsForEdit();
+    }
+    _loadDescriptionHistory();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _fadeAnimationController.forward();
+        setState(() => _isInitialized = true);
+      }
+    });
   }
 
   void _populateFieldsForEdit() {
@@ -90,190 +109,147 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     _selectedDate = transaction.date;
   }
 
-  Future<void> _loadDescriptionHistory() async {
-    // TODO: Implement description history loading from DataService
-    // For now, use sample data
-    setState(() {
-      _descriptionHistory = [
-        'Ăn trưa',
-        'Cà phê',
-        'Xăng xe',
-        'Siêu thị',
-        'Điện thoại',
-        'Internet',
-        'Thuê nhà',
-        'Ăn sáng',
-        'Grab',
-        'Shopee',
-      ];
-    });
+  void _loadDescriptionHistory() {
+    // TODO: Load from actual data service
+    _descriptionHistory = [
+      'Ăn trưa',
+      'Cà phê',
+      'Xăng xe',
+      'Siêu thị',
+      'Điện thoại',
+      'Internet',
+      'Thuê nhà',
+      'Ăn sáng',
+      'Grab',
+      'Shopee',
+    ];
+  }
+
+  void _safeSetState(VoidCallback fn) {
+    if (mounted) {
+      setState(fn);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer5<
-      UserProvider,
-      WalletProvider,
-      CategoryProvider,
-      TransactionProvider,
-      ConnectionStatusProvider
-    >(
-      builder:
-          (
-            context,
-            userProvider,
-            walletProvider,
-            categoryProvider,
-            transactionProvider,
-            connectionStatus,
-            child,
-          ) {
-            return Scaffold(
-              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-              appBar: _buildAppBar(connectionStatus),
-              body: AnimatedBuilder(
-                animation: _typeAnimation,
-                builder: (context, child) {
-                  return Stack(
-                    children: [
-                      // Gradient Background
-                      Container(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              Theme.of(context).primaryColor.withOpacity(0.05),
-                              Theme.of(context).scaffoldBackgroundColor,
-                              Theme.of(context).primaryColor.withOpacity(0.02),
-                            ],
-                            stops: const [0.0, 0.5, 1.0],
+    return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      appBar: _buildAppBar(),
+      body: SafeArea(
+        child:
+            Consumer5<
+              UserProvider,
+              WalletProvider,
+              CategoryProvider,
+              TransactionProvider,
+              ConnectionStatusProvider
+            >(
+              builder:
+                  (
+                    context,
+                    userProvider,
+                    walletProvider,
+                    categoryProvider,
+                    transactionProvider,
+                    connectionStatus,
+                    child,
+                  ) {
+                    if (!_isInitialized) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    return Form(
+                      key: _formKey,
+                      child: Column(
+                        children: [
+                          // Main Content
+                          Expanded(
+                            child: Container(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    Theme.of(
+                                      context,
+                                    ).primaryColor.withOpacity(0.05),
+                                    Theme.of(context).scaffoldBackgroundColor,
+                                    Theme.of(
+                                      context,
+                                    ).primaryColor.withOpacity(0.02),
+                                  ],
+                                  stops: const [0.0, 0.5, 1.0],
+                                ),
+                              ),
+                              child: SingleChildScrollView(
+                                physics: const ClampingScrollPhysics(),
+                                padding: const EdgeInsets.all(20),
+                                child: FadeTransition(
+                                  opacity: _fadeAnimation,
+                                  child: Column(
+                                    children: [
+                                      // Transaction Type Selector
+                                      _buildTransactionTypeSelector(),
+                                      const SizedBox(height: 24),
+
+                                      // Amount Input
+                                      _buildAmountInput(),
+                                      const SizedBox(height: 20),
+
+                                      // Wallet Selector
+                                      _buildWalletSelector(
+                                        walletProvider,
+                                        userProvider,
+                                      ),
+                                      const SizedBox(height: 20),
+
+                                      // Category Selector
+                                      _buildCategorySelector(
+                                        categoryProvider,
+                                        userProvider,
+                                      ),
+
+                                      // Sub-category Selector (conditional)
+                                      if (_selectedCategoryId != null) ...[
+                                        const SizedBox(height: 20),
+                                        _buildSubCategorySelector(
+                                          categoryProvider,
+                                        ),
+                                      ],
+
+                                      const SizedBox(height: 20),
+
+                                      // Date Selector
+                                      _buildDateSelector(),
+                                      const SizedBox(height: 20),
+
+                                      // Description Input
+                                      _buildDescriptionInput(),
+                                      const SizedBox(height: 20),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
+
+                          // Submit Button
+                          _buildBottomSubmitButton(
+                            transactionProvider,
+                            connectionStatus,
+                          ),
+                        ],
                       ),
-
-                      // Main Content
-                      Form(
-                        key: _formKey,
-                        child: ListView(
-                          padding: const EdgeInsets.fromLTRB(20, 20, 20, 100),
-                          children: [
-                            // Transaction Type Selector with Animation
-                            FadeTransition(
-                              opacity: _typeAnimation,
-                              child: SlideTransition(
-                                position: Tween<Offset>(
-                                  begin: const Offset(0, 0.3),
-                                  end: Offset.zero,
-                                ).animate(_typeAnimation),
-                                child: _buildTransactionTypeSelector(),
-                              ),
-                            ),
-
-                            const SizedBox(height: 24),
-
-                            // Smart Amount Input
-                            FadeTransition(
-                              opacity: _typeAnimation,
-                              child: SlideTransition(
-                                position: Tween<Offset>(
-                                  begin: const Offset(0, 0.4),
-                                  end: Offset.zero,
-                                ).animate(_typeAnimation),
-                                child: _buildSmartAmountInput(),
-                              ),
-                            ),
-
-                            const SizedBox(height: 20),
-
-                            // Wallet Selector
-                            FadeTransition(
-                              opacity: _typeAnimation,
-                              child: SlideTransition(
-                                position: Tween<Offset>(
-                                  begin: const Offset(0, 0.5),
-                                  end: Offset.zero,
-                                ).animate(_typeAnimation),
-                                child: _buildWalletSelector(
-                                  walletProvider,
-                                  userProvider,
-                                ),
-                              ),
-                            ),
-
-                            const SizedBox(height: 20),
-
-                            // Category Selector
-                            FadeTransition(
-                              opacity: _typeAnimation,
-                              child: SlideTransition(
-                                position: Tween<Offset>(
-                                  begin: const Offset(0, 0.6),
-                                  end: Offset.zero,
-                                ).animate(_typeAnimation),
-                                child: _buildCategorySelector(
-                                  categoryProvider,
-                                  userProvider,
-                                ),
-                              ),
-                            ),
-
-                            if (_selectedCategoryId != null) ...[
-                              const SizedBox(height: 20),
-                              FadeTransition(
-                                opacity: _typeAnimation,
-                                child: _buildSubCategorySelector(
-                                  categoryProvider,
-                                ),
-                              ),
-                            ],
-
-                            const SizedBox(height: 20),
-
-                            // Date Selector
-                            FadeTransition(
-                              opacity: _typeAnimation,
-                              child: SlideTransition(
-                                position: Tween<Offset>(
-                                  begin: const Offset(0, 0.7),
-                                  end: Offset.zero,
-                                ).animate(_typeAnimation),
-                                child: _buildDateSelector(),
-                              ),
-                            ),
-
-                            const SizedBox(height: 20),
-
-                            // Description Input
-                            FadeTransition(
-                              opacity: _typeAnimation,
-                              child: SlideTransition(
-                                position: Tween<Offset>(
-                                  begin: const Offset(0, 0.8),
-                                  end: Offset.zero,
-                                ).animate(_typeAnimation),
-                                child: _buildDescriptionInput(),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      //  Submit Button
-                      _buildFloatingSubmitButton(
-                        transactionProvider,
-                        connectionStatus,
-                      ),
-                    ],
-                  );
-                },
-              ),
-            );
-          },
+                    );
+                  },
+            ),
+      ),
     );
   }
 
-  PreferredSizeWidget _buildAppBar(ConnectionStatusProvider connectionStatus) {
+  // ============ APP BAR ============
+  PreferredSizeWidget _buildAppBar() {
     return AppBar(
       elevation: 0,
       backgroundColor: Colors.transparent,
@@ -307,7 +283,70 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
             ),
           ),
           const SizedBox(width: 12),
-          _buildConnectionStatusBadge(connectionStatus),
+          Consumer<ConnectionStatusProvider>(
+            builder: (context, connectionStatus, child) {
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: connectionStatus.isOnline
+                      ? Colors.green.withOpacity(0.15)
+                      : Colors.orange.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: connectionStatus.isOnline
+                        ? Colors.green.withOpacity(0.3)
+                        : Colors.orange.withOpacity(0.3),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (connectionStatus.isSyncing)
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            connectionStatus.isOnline
+                                ? Colors.green.shade700
+                                : Colors.orange.shade700,
+                          ),
+                        ),
+                      )
+                    else
+                      Icon(
+                        connectionStatus.isOnline
+                            ? Icons.wifi_rounded
+                            : Icons.wifi_off_rounded,
+                        size: 14,
+                        color: connectionStatus.isOnline
+                            ? Colors.green.shade700
+                            : Colors.orange.shade700,
+                      ),
+                    const SizedBox(width: 6),
+                    Text(
+                      connectionStatus.isSyncing
+                          ? 'Syncing'
+                          : (connectionStatus.isOnline ? 'Online' : 'Offline'),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: connectionStatus.isOnline
+                            ? Colors.green.shade800
+                            : Colors.orange.shade800,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
         ],
       ),
       actions: [
@@ -339,68 +378,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildConnectionStatusBadge(
-    ConnectionStatusProvider connectionStatus,
-  ) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: connectionStatus.isOnline
-            ? Colors.green.withOpacity(0.15)
-            : Colors.orange.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: connectionStatus.isOnline
-              ? Colors.green.withOpacity(0.3)
-              : Colors.orange.withOpacity(0.3),
-          width: 1,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (connectionStatus.isSyncing)
-            SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(
-                  connectionStatus.isOnline
-                      ? Colors.green.shade700
-                      : Colors.orange.shade700,
-                ),
-              ),
-            )
-          else
-            Icon(
-              connectionStatus.isOnline
-                  ? Icons.wifi_rounded
-                  : Icons.wifi_off_rounded,
-              size: 14,
-              color: connectionStatus.isOnline
-                  ? Colors.green.shade700
-                  : Colors.orange.shade700,
-            ),
-          const SizedBox(width: 6),
-          Text(
-            connectionStatus.isSyncing
-                ? 'Syncing'
-                : (connectionStatus.isOnline ? 'Online' : 'Offline'),
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: connectionStatus.isOnline
-                  ? Colors.green.shade800
-                  : Colors.orange.shade800,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
+  // ============ TRANSACTION TYPE SELECTOR ============
   Widget _buildTransactionTypeSelector() {
     return Container(
       padding: const EdgeInsets.all(6),
@@ -448,7 +426,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     final isSelected = _selectedType == type;
 
     return GestureDetector(
-      onTap: () => setState(() {
+      onTap: () => _safeSetState(() {
         _selectedType = type;
         _selectedCategoryId = null;
         _selectedSubCategoryId = null;
@@ -495,7 +473,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildSmartAmountInput() {
+  // ============ AMOUNT INPUT ============
+  Widget _buildAmountInput() {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -545,7 +524,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
             categoryType: _selectedType == TransactionType.income
                 ? 'income'
                 : _selectedType == TransactionType.expense
-                ? 'food' // Default category for smart suggestions
+                ? 'food'
                 : 'transfer',
             showQuickButtons: true,
             showSuggestions: true,
@@ -600,6 +579,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
+  // ============ WALLET SELECTOR ============
   Widget _buildWalletSelector(
     WalletProvider walletProvider,
     UserProvider userProvider,
@@ -642,11 +622,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
             ],
           ),
           const SizedBox(height: 16),
-
-          // StreamBuilder with error handling and offline support
-          StreamBuilder<List<Wallet>>(
-            stream: walletProvider.getWalletsStream(),
-            builder: (context, snapshot) {
+          Consumer<WalletProvider>(
+            builder: (context, walletProvider, child) {
               if (walletProvider.isLoading) {
                 return _buildLoadingState();
               }
@@ -666,7 +643,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
               if (_selectedWalletId != null &&
                   !wallets.any((w) => w.id == _selectedWalletId)) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
-                  setState(() => _selectedWalletId = null);
+                  _safeSetState(() => _selectedWalletId = null);
                 });
               }
 
@@ -681,6 +658,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
   Widget _buildWalletDropdown(List<Wallet> wallets, UserProvider userProvider) {
     return DropdownButtonFormField<String>(
       value: _selectedWalletId,
+      isExpanded: true,
       decoration: InputDecoration(
         filled: true,
         fillColor: Colors.blue.withOpacity(0.05),
@@ -731,7 +709,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                 ),
               ),
               const SizedBox(width: 12),
-              Flexible(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
@@ -753,6 +731,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                         fontSize: 12,
                         color: Colors.grey.shade600,
                       ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
@@ -761,7 +740,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
           ),
         );
       }).toList(),
-      onChanged: (value) => setState(() => _selectedWalletId = value),
+      onChanged: (value) => _safeSetState(() => _selectedWalletId = value),
       validator: (value) => value == null ? 'Vui lòng chọn ví' : null,
       onTap: () {
         FocusScope.of(context).unfocus();
@@ -818,79 +797,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  void _showQuickCreateWalletDialog(WalletProvider walletProvider) {
-    final nameController = TextEditingController();
-    final balanceController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Tạo ví nhanh'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(
-                labelText: 'Tên ví',
-                hintText: 'VD: Tiền mặt, Ngân hàng...',
-              ),
-              autofocus: true,
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: balanceController,
-              decoration: const InputDecoration(
-                labelText: 'Số dư ban đầu (₫)',
-                hintText: '0',
-              ),
-              keyboardType: TextInputType.number,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Hủy'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final name = nameController.text.trim();
-              if (name.isNotEmpty) {
-                try {
-                  final balance =
-                      double.tryParse(balanceController.text) ?? 0.0;
-
-                  await walletProvider.addWallet(
-                    name: name,
-                    initialBalance: balance,
-                  );
-
-                  Navigator.pop(context);
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Đã tạo ví "$name" thành công'),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Lỗi khi tạo ví: $e'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                }
-              }
-            },
-            child: const Text('Tạo'),
-          ),
-        ],
-      ),
-    );
-  }
-
+  // ============ CATEGORY SELECTOR ============
   Widget _buildCategorySelector(
     CategoryProvider categoryProvider,
     UserProvider userProvider,
@@ -938,9 +845,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
             ],
           ),
           const SizedBox(height: 16),
-          StreamBuilder<List<Category>>(
-            stream: categoryProvider.getCategoriesStream(),
-            builder: (context, snapshot) {
+          Consumer<CategoryProvider>(
+            builder: (context, categoryProvider, child) {
               if (categoryProvider.isLoading) {
                 return const Center(child: CircularProgressIndicator());
               }
@@ -964,6 +870,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                 children: [
                   DropdownButtonFormField<String>(
                     value: _selectedCategoryId,
+                    isExpanded: true,
                     decoration: InputDecoration(
                       filled: true,
                       fillColor: Colors.purple.withOpacity(0.05),
@@ -1005,11 +912,12 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                         child: Text(
                           category.name,
                           style: const TextStyle(fontSize: 15),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       );
                     }).toList(),
                     onChanged: (value) {
-                      setState(() {
+                      _safeSetState(() {
                         _selectedCategoryId = value;
                         _selectedSubCategoryId = null;
                       });
@@ -1099,6 +1007,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
+  // ============ SUB-CATEGORY SELECTOR ============
   Widget _buildSubCategorySelector(CategoryProvider categoryProvider) {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1138,14 +1047,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
             ],
           ),
           const SizedBox(height: 16),
-          StreamBuilder<List<Category>>(
-            stream: categoryProvider.getCategoriesStream(),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) {
-                return const CircularProgressIndicator();
-              }
-
-              final categories = snapshot.data!;
+          Consumer<CategoryProvider>(
+            builder: (context, categoryProvider, child) {
+              final categories = categoryProvider.categories;
               final selectedCategory = categories.firstWhere(
                 (cat) => cat.id == _selectedCategoryId,
                 orElse: () => const Category(
@@ -1160,57 +1064,55 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                 return _buildEmptySubCategoryState(selectedCategory.id);
               }
 
-              return Column(
-                children: [
-                  DropdownButtonFormField<String>(
-                    value: _selectedSubCategoryId,
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: Colors.indigo.withOpacity(0.05),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16),
-                        borderSide: BorderSide.none,
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16),
-                        borderSide: const BorderSide(
-                          color: Colors.indigo,
-                          width: 2,
-                        ),
-                      ),
-                      hintText: 'Chọn danh mục con (tùy chọn)',
-                      prefixIcon: Container(
-                        margin: const EdgeInsets.all(12),
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.indigo.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(
-                          Icons.label_outline_rounded,
-                          color: Colors.indigo,
-                          size: 18,
-                        ),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 16,
-                      ),
-                    ),
-                    items: selectedCategory.subCategories.entries.map((entry) {
-                      return DropdownMenuItem(
-                        value: entry.key,
-                        child: Text(
-                          entry.value,
-                          style: const TextStyle(fontSize: 15),
-                        ),
-                      );
-                    }).toList(),
-                    onChanged: (value) {
-                      setState(() => _selectedSubCategoryId = value);
-                    },
+              return DropdownButtonFormField<String>(
+                value: _selectedSubCategoryId,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: Colors.indigo.withOpacity(0.05),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide.none,
                   ),
-                ],
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(
+                      color: Colors.indigo,
+                      width: 2,
+                    ),
+                  ),
+                  hintText: 'Chọn danh mục con (tùy chọn)',
+                  prefixIcon: Container(
+                    margin: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.indigo.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(
+                      Icons.label_outline_rounded,
+                      color: Colors.indigo,
+                      size: 18,
+                    ),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 16,
+                  ),
+                ),
+                items: selectedCategory.subCategories.entries.map((entry) {
+                  return DropdownMenuItem(
+                    value: entry.key,
+                    child: Text(
+                      entry.value,
+                      style: const TextStyle(fontSize: 15),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  _safeSetState(() => _selectedSubCategoryId = value);
+                },
               );
             },
           ),
@@ -1249,6 +1151,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
+  // ============ DATE SELECTOR ============
   Widget _buildDateSelector() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1352,6 +1255,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
+  // ============ DESCRIPTION INPUT ============
   Widget _buildDescriptionInput() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1391,8 +1295,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
             ],
           ),
           const SizedBox(height: 16),
-
-          //  Description Input with Autocomplete
           Autocomplete<String>(
             optionsBuilder: (TextEditingValue textEditingValue) {
               if (textEditingValue.text.isEmpty) {
@@ -1523,8 +1425,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
               );
             },
           ),
-
-          // Quick Access Chips
           if (_descriptionHistory.isNotEmpty) ...[
             const SizedBox(height: 16),
             Row(
@@ -1559,7 +1459,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
                   label: Text(desc, style: const TextStyle(fontSize: 12)),
                   onPressed: () {
                     _descriptionController.text = desc;
-                    setState(() {});
+                    _safeSetState(() {});
                   },
                   backgroundColor: Colors.amber.withOpacity(0.1),
                   labelStyle: TextStyle(
@@ -1579,113 +1479,297 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
     );
   }
 
-  Widget _buildFloatingSubmitButton(
+  // ============ BOTTOM SUBMIT BUTTON ============
+  Widget _buildBottomSubmitButton(
     TransactionProvider transactionProvider,
     ConnectionStatusProvider connectionStatus,
   ) {
-    return Positioned(
-      left: 20,
-      right: 20,
-      bottom: 20,
-      child: AnimatedScale(
-        scale: _isLoading ? 0.95 : 1.0,
-        duration: const Duration(milliseconds: 150),
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                Theme.of(context).primaryColor,
-                Theme.of(context).primaryColor.withOpacity(0.8),
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: Theme.of(context).primaryColor.withOpacity(0.4),
-                blurRadius: 20,
-                offset: const Offset(0, 8),
-              ),
-            ],
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, -5),
           ),
-          child: ElevatedButton(
-            onPressed: _isLoading
+        ],
+      ),
+      child: Container(
+        width: double.infinity,
+        height: 56,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              Theme.of(context).primaryColor,
+              Theme.of(context).primaryColor.withOpacity(0.8),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Theme.of(context).primaryColor.withOpacity(0.4),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: _isLoading
                 ? null
                 : () => _submitForm(transactionProvider, connectionStatus),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.transparent,
-              shadowColor: Colors.transparent,
-              padding: const EdgeInsets.symmetric(vertical: 20),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-            ),
-            child: _isLoading
-                ? Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white.withOpacity(0.8),
+            borderRadius: BorderRadius.circular(20),
+            child: Center(
+              child: _isLoading
+                  ? Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white.withOpacity(0.8),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        'Đang xử lý...',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white.withOpacity(0.8),
+                        const SizedBox(width: 12),
+                        Text(
+                          'Đang xử lý...',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white.withOpacity(0.8),
+                          ),
                         ),
-                      ),
-                    ],
-                  )
-                : Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(
-                        Icons.check_circle_rounded,
-                        color: Colors.white,
-                        size: 22,
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        widget.transactionToEdit != null
-                            ? 'CẬP NHẬT GIAO DỊCH'
-                            : 'HOÀN THÀNH',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                      ],
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.check_circle_rounded,
                           color: Colors.white,
-                          letterSpacing: 0.5,
+                          size: 22,
                         ),
-                      ),
-                    ],
-                  ),
+                        const SizedBox(width: 12),
+                        Text(
+                          widget.transactionToEdit != null
+                              ? 'CẬP NHẬT GIAO DỊCH'
+                              : 'HOÀN THÀNH',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  // Dialog Methods
+  // ============ UTILITY WIDGETS ============
+  Widget _buildLoadingState() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue.shade600),
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Text('Đang tải...'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState(String error) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.red.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.error_outline, color: Colors.red.shade600, size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                'Không thể tải dữ liệu',
+                style: TextStyle(fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Vui lòng kiểm tra kết nối mạng và thử lại',
+            style: TextStyle(fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: () {
+              _safeSetState(() {});
+            },
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            label: const Text('Thử lại'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============ HELPER METHODS ============
+  WalletDisplayInfo _getWalletDisplayInfo(
+    Wallet wallet,
+    UserProvider userProvider,
+  ) {
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+    if (wallet.ownerId == userProvider.partnershipId) {
+      return WalletDisplayInfo(
+        displayName: '${wallet.name} (Chung)',
+        icon: Icons.people_rounded,
+        iconColor: Colors.orange,
+        ownershipType: 'shared',
+      );
+    } else if (wallet.ownerId == currentUserId) {
+      return WalletDisplayInfo(
+        displayName: '${wallet.name} (Cá nhân)',
+        icon: Icons.person_rounded,
+        iconColor: Colors.green,
+        ownershipType: 'personal',
+      );
+    } else if (wallet.ownerId == userProvider.partnerUid) {
+      return WalletDisplayInfo(
+        displayName: '${wallet.name} (Đối tác)',
+        icon: Icons.supervisor_account_rounded,
+        iconColor: Colors.purple,
+        ownershipType: 'partner',
+      );
+    } else {
+      return WalletDisplayInfo(
+        displayName: wallet.name,
+        icon: Icons.account_balance_wallet_rounded,
+        iconColor: Colors.blue,
+        ownershipType: 'unknown',
+      );
+    }
+  }
+
+  // ============ DIALOG METHODS ============
+  void _showQuickCreateWalletDialog(WalletProvider walletProvider) {
+    final nameController = TextEditingController();
+    final balanceController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Tạo ví nhanh'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(
+                labelText: 'Tên ví',
+                hintText: 'VD: Tiền mặt, Ngân hàng...',
+              ),
+              autofocus: true,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: balanceController,
+              decoration: const InputDecoration(
+                labelText: 'Số dư ban đầu (₫)',
+                hintText: '0',
+              ),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final name = nameController.text.trim();
+              if (name.isNotEmpty) {
+                try {
+                  final balance =
+                      double.tryParse(balanceController.text) ?? 0.0;
+
+                  await walletProvider.addWallet(
+                    name: name,
+                    initialBalance: balance,
+                  );
+
+                  Navigator.pop(context);
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Đã tạo ví "$name" thành công'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Lỗi khi tạo ví: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text('Tạo'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showAddCategoryDialog(
     CategoryProvider categoryProvider,
     UserProvider userProvider,
   ) {
     showDialog(
       context: context,
-      builder: (context) => CategoryCreationDialog(
+      builder: (context) => EnhancedCategoryCreationDialog(
         type: _selectedType == TransactionType.income ? 'income' : 'expense',
         userProvider: userProvider,
         onCreated: (name, ownershipType) {
-          // Category will be automatically available through the stream
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Đã tạo danh mục "$name" thành công'),
@@ -1748,7 +1832,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
       );
 
       if (time != null) {
-        setState(() {
+        _safeSetState(() {
           _selectedDate = DateTime(
             date.year,
             date.month,
@@ -1767,7 +1851,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
   ) async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isLoading = true);
+    _safeSetState(() => _isLoading = true);
 
     try {
       final amount = parseAmount(_amountController.text);
@@ -1785,7 +1869,6 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
         userId: FirebaseAuth.instance.currentUser!.uid,
       );
 
-      // Use TransactionProvider instead of direct service calls
       final success = await transactionProvider.addTransaction(transaction);
 
       if (success) {
@@ -1846,118 +1929,12 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      _safeSetState(() => _isLoading = false);
     }
-  }
-
-  WalletDisplayInfo _getWalletDisplayInfo(
-    Wallet wallet,
-    UserProvider userProvider,
-  ) {
-    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-
-    if (wallet.ownerId == userProvider.partnershipId) {
-      return WalletDisplayInfo(
-        displayName: '${wallet.name} (Chung)',
-        icon: Icons.people_rounded,
-        iconColor: Colors.orange,
-        ownershipType: 'shared',
-      );
-    } else if (wallet.ownerId == currentUserId) {
-      return WalletDisplayInfo(
-        displayName: '${wallet.name} (Cá nhân)',
-        icon: Icons.person_rounded,
-        iconColor: Colors.green,
-        ownershipType: 'personal',
-      );
-    } else if (wallet.ownerId == userProvider.partnerUid) {
-      return WalletDisplayInfo(
-        displayName: '${wallet.name} (Đối tác)',
-        icon: Icons.supervisor_account_rounded,
-        iconColor: Colors.purple,
-        ownershipType: 'partner',
-      );
-    } else {
-      return WalletDisplayInfo(
-        displayName: wallet.name,
-        icon: Icons.account_balance_wallet_rounded,
-        iconColor: Colors.blue,
-        ownershipType: 'unknown',
-      );
-    }
-  }
-
-  Widget _buildLoadingState() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue.shade600),
-            ),
-          ),
-          const SizedBox(width: 12),
-          const Text('Đang tải danh sách ví...'),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildErrorState(String error) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.red.shade50,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.red.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.error_outline, color: Colors.red.shade600, size: 20),
-              const SizedBox(width: 8),
-              const Text(
-                'Không thể tải danh sách ví',
-                style: TextStyle(fontWeight: FontWeight.w500),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Vui lòng kiểm tra kết nối mạng và thử lại',
-            style: TextStyle(fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          ElevatedButton.icon(
-            onPressed: () {
-              setState(() {});
-            },
-            icon: const Icon(Icons.refresh_rounded, size: 16),
-            label: const Text('Thử lại'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red.shade600,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 
+// ============ DATA CLASSES ============
 class WalletDisplayInfo {
   final String displayName;
   final IconData icon;

@@ -1,6 +1,8 @@
+// lib/data/providers/wallet_provider_fixed.dart
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:moneysun/data/models/wallet_model.dart';
-import 'package:moneysun/data/services/data_service.dart'; // ✅ Updated import
+import 'package:moneysun/data/services/data_service.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 
 class WalletProvider extends ChangeNotifier {
@@ -9,7 +11,8 @@ class WalletProvider extends ChangeNotifier {
 
   WalletProvider(this._dataService, this._userProvider) {
     _dataService.addListener(_onDataServiceChanged);
-    _loadInitialData();
+    // ✅ Fix: Defer initial load to avoid setState during build
+    _scheduleInitialLoad();
   }
 
   // ============ STATE MANAGEMENT ============
@@ -18,6 +21,7 @@ class WalletProvider extends ChangeNotifier {
   bool _isLoading = false;
   String? _error;
   bool _includeArchived = false;
+  bool _isInitialized = false;
 
   // ============ GETTERS ============
   List<Wallet> get wallets => _filteredWallets;
@@ -44,6 +48,7 @@ class WalletProvider extends ChangeNotifier {
   bool get hasError => _error != null;
   int get walletCount => _filteredWallets.length;
   bool get includeArchived => _includeArchived;
+  bool get isInitialized => _isInitialized;
 
   // Financial overview
   double get totalBalance =>
@@ -54,6 +59,20 @@ class WalletProvider extends ChangeNotifier {
       sharedWallets.fold(0, (sum, w) => sum + w.balance);
 
   // ============ PUBLIC METHODS ============
+
+  /// ✅ Fix: Safe initial load scheduling
+  void _scheduleInitialLoad() {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _loadInitialDataSafely();
+    });
+  }
+
+  void _loadInitialDataSafely() {
+    if (_dataService.isInitialized && !_isInitialized) {
+      _isInitialized = true;
+      loadWallets();
+    }
+  }
 
   /// Load all wallets using DataService
   Future<void> loadWallets({bool forceRefresh = false}) async {
@@ -81,7 +100,7 @@ class WalletProvider extends ChangeNotifier {
     }
   }
 
-  /// Add new wallet using DataService with optimistic updates
+  /// ✅ Fix: Enhanced addWallet with proper amount parsing
   Future<bool> addWallet({
     required String name,
     required double initialBalance,
@@ -91,10 +110,21 @@ class WalletProvider extends ChangeNotifier {
   }) async {
     _clearError();
 
+    // ✅ Validate input parameters
+    if (name.trim().isEmpty) {
+      _setError('Tên ví không được để trống');
+      return false;
+    }
+
+    if (initialBalance < 0) {
+      _setError('Số dư ban đầu không được âm');
+      return false;
+    }
+
     // Create temporary wallet for optimistic update
     final tempWallet = Wallet(
       id: 'temp_${DateTime.now().millisecondsSinceEpoch}',
-      name: name,
+      name: name.trim(),
       balance: initialBalance,
       ownerId: ownerId ?? _userProvider.currentUser?.uid ?? '',
       isVisibleToPartner: isVisibleToPartner,
@@ -102,7 +132,7 @@ class WalletProvider extends ChangeNotifier {
     );
 
     try {
-      debugPrint('➕ Adding wallet: $name');
+      debugPrint('➕ Adding wallet: $name with balance: $initialBalance');
 
       // Optimistic update - add to local list immediately
       _wallets.add(tempWallet);
@@ -110,7 +140,7 @@ class WalletProvider extends ChangeNotifier {
       notifyListeners();
 
       await _dataService.addWallet(
-        name: name,
+        name: name.trim(),
         initialBalance: initialBalance,
         type: type,
         isVisibleToPartner: isVisibleToPartner,
@@ -195,16 +225,14 @@ class WalletProvider extends ChangeNotifier {
 
   // ============ PRIVATE METHODS ============
 
-  void _loadInitialData() {
-    if (_dataService.isInitialized) {
-      loadWallets();
-    }
-  }
-
+  /// ✅ Fix: Safe data service change handling
   void _onDataServiceChanged() {
-    if (!_isLoading && _dataService.isInitialized) {
-      loadWallets(forceRefresh: true);
-    }
+    // Use postFrameCallback to avoid setState during build
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!_isLoading && _dataService.isInitialized) {
+        loadWallets(forceRefresh: true);
+      }
+    });
   }
 
   void _applyCurrentFilters() {
