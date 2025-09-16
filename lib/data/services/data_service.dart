@@ -1,6 +1,3 @@
-// lib/data/services/complete_dataservice.dart
-// COMPLETE DATASERVICE IMPLEMENTATION - REPLACING DATABASE_SERVICE
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -487,29 +484,140 @@ class DataService extends ChangeNotifier {
     }
 
     await _localDatabase!.transaction((txn) async {
-      // 1. Insert transaction
+      // ✅ FIX: Validate category exists (if provided)
+      if (transaction.categoryId != null &&
+          transaction.categoryId!.isNotEmpty) {
+        final categoryExists = await txn.query(
+          'categories',
+          where: 'id = ? OR firebase_id = ?',
+          whereArgs: [transaction.categoryId!, transaction.categoryId!],
+          limit: 1,
+        );
+
+        if (categoryExists.isEmpty) {
+          debugPrint(
+            '⚠️ Category ${transaction.categoryId} not found, creating placeholder',
+          );
+          await txn.insert('categories', {
+            'id': transaction.categoryId!,
+            'firebase_id': transaction.categoryId!,
+            'name': transaction.categoryName ?? 'Danh mục khác',
+            'owner_id': currentUserId ?? 'unknown',
+            'type': 'expense',
+            'icon_code_point': 0xe94f,
+            'sub_categories': '{}',
+            'ownership_type': 'personal',
+            'created_by': currentUserId,
+            'is_archived': 0,
+            'usage_count': 0,
+            'sync_status': 2, // Placeholder status
+            'version': 1,
+          });
+        }
+      }
+
+      // ✅ FIX: Validate wallet exists
+      final walletExists = await txn.query(
+        'wallets',
+        where: 'id = ? OR firebase_id = ?',
+        whereArgs: [transaction.walletId, transaction.walletId],
+        limit: 1,
+      );
+
+      if (walletExists.isEmpty) {
+        debugPrint(
+          '⚠️ Wallet ${transaction.walletId} not found, creating placeholder',
+        );
+        await txn.insert('wallets', {
+          'id': transaction.walletId,
+          'firebase_id': transaction.walletId,
+          'name': transaction.walletName ?? 'Ví khác',
+          'balance': 0.0,
+          'owner_id': currentUserId ?? 'unknown',
+          'is_visible_to_partner': 1,
+          'wallet_type': 'general',
+          'currency': 'VND',
+          'is_archived': 0,
+          'sync_status': 2, // Placeholder status
+          'version': 1,
+        });
+      }
+
+      // ✅ FIX: Validate transfer wallet if applicable
+      if (transaction.transferToWalletId != null &&
+          transaction.transferToWalletId!.isNotEmpty) {
+        final transferWalletExists = await txn.query(
+          'wallets',
+          where: 'id = ? OR firebase_id = ?',
+          whereArgs: [
+            transaction.transferToWalletId!,
+            transaction.transferToWalletId!,
+          ],
+          limit: 1,
+        );
+
+        if (transferWalletExists.isEmpty) {
+          await txn.insert('wallets', {
+            'id': transaction.transferToWalletId!,
+            'firebase_id': transaction.transferToWalletId!,
+            'name': transaction.transferToWalletName ?? 'Ví chuyển đến',
+            'balance': 0.0,
+            'owner_id': currentUserId ?? 'unknown',
+            'is_visible_to_partner': 1,
+            'wallet_type': 'general',
+            'currency': 'VND',
+            'is_archived': 0,
+            'sync_status': 2,
+            'version': 1,
+          });
+        }
+      }
+
+      // ✅ FIX: Insert transaction with null safety
       await txn.insert('transactions', {
         'id': transaction.id,
         'amount': transaction.amount,
         'type': transaction.type.name,
-        'category_id': transaction.categoryId,
+        'category_id': (transaction.categoryId?.isNotEmpty == true)
+            ? transaction.categoryId
+            : null,
         'wallet_id': transaction.walletId,
         'date': transaction.date.toIso8601String(),
         'description': transaction.description,
         'user_id': transaction.userId,
-        'sub_category_id': transaction.subCategoryId,
-        'transfer_to_wallet_id': transaction.transferToWalletId,
-        'wallet_name': transaction.walletName,
-        'category_name': transaction.categoryName,
-        'sub_category_name': transaction.subCategoryName,
-        'transfer_from_wallet_name': transaction.transferFromWalletName,
-        'transfer_to_wallet_name': transaction.transferToWalletName,
+        'sub_category_id': (transaction.subCategoryId?.isNotEmpty == true)
+            ? transaction.subCategoryId
+            : null,
+        'transfer_to_wallet_id':
+            (transaction.transferToWalletId?.isNotEmpty == true)
+            ? transaction.transferToWalletId
+            : null,
+        'wallet_name': transaction.walletName ?? '',
+        'category_name': transaction.categoryName ?? '',
+        'sub_category_name': transaction.subCategoryName ?? '',
+        'transfer_from_wallet_name': transaction.transferFromWalletName ?? '',
+        'transfer_to_wallet_name': transaction.transferToWalletName ?? '',
         'sync_status': 0, // Unsynced
         'version': 1,
         'created_by': currentUserId,
       });
 
-      // 2. Add to sync queue with high priority
+      // Increment category usage if category provided
+      if (transaction.categoryId != null &&
+          transaction.categoryId!.isNotEmpty) {
+        await txn.update(
+          'categories',
+          {
+            'usage_count': 'usage_count + 1',
+            'last_used': DateTime.now().millisecondsSinceEpoch,
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'id = ? OR firebase_id = ?',
+          whereArgs: [transaction.categoryId!, transaction.categoryId!],
+        );
+      }
+
+      // Add to sync queue
       await _addToSyncQueue(
         txn,
         'transactions',
@@ -520,13 +628,13 @@ class DataService extends ChangeNotifier {
       );
     });
 
-    // 3. Try immediate sync if online
+    // Try immediate sync if online
     if (_isOnline) {
       unawaited(_syncSingleRecord('transactions', transaction.id));
     }
 
     notifyListeners();
-    debugPrint('✅ Transaction added: ${transaction.description}');
+    debugPrint('✅ Transaction added safely: ${transaction.description}');
   }
 
   /// Get wallets with offline-first support
@@ -1011,46 +1119,6 @@ class DataService extends ChangeNotifier {
       'sync_status': 1, // Synced
       'version': firebaseData['version'] ?? 1,
       'created_by': firebaseData['createdBy'],
-    });
-  }
-
-  Future<void> _insertWalletFromFirebase(
-    Transaction txn,
-    String firebaseId,
-    Map<dynamic, dynamic> firebaseData,
-  ) async {
-    await txn.insert('wallets', {
-      'id': firebaseData['id'] ?? firebaseId,
-      'firebase_id': firebaseId,
-      'name': firebaseData['name'] ?? '',
-      'balance': (firebaseData['balance'] ?? 0).toDouble(),
-      'owner_id': firebaseData['ownerId'] ?? '',
-      'is_visible_to_partner': (firebaseData['isVisibleToPartner'] ?? true)
-          ? 1
-          : 0,
-      'wallet_type': firebaseData['type'] ?? 'general',
-      'sync_status': 1, // Synced
-      'version': firebaseData['version'] ?? 1,
-    });
-  }
-
-  Future<void> _insertCategoryFromFirebase(
-    Transaction txn,
-    String firebaseId,
-    Map<dynamic, dynamic> firebaseData,
-  ) async {
-    await txn.insert('categories', {
-      'id': firebaseData['id'] ?? firebaseId,
-      'firebase_id': firebaseId,
-      'name': firebaseData['name'] ?? '',
-      'owner_id': firebaseData['ownerId'] ?? '',
-      'type': firebaseData['type'] ?? 'expense',
-      'icon_code_point': firebaseData['iconCodePoint'],
-      'sub_categories': jsonEncode(firebaseData['subCategories'] ?? {}),
-      'ownership_type': firebaseData['ownershipType'] ?? 'personal',
-      'created_by': firebaseData['createdBy'],
-      'sync_status': 1, // Synced
-      'version': firebaseData['version'] ?? 1,
     });
   }
 
@@ -1819,6 +1887,727 @@ class DataService extends ChangeNotifier {
       return partnershipId!;
     }
     return currentUserId ?? '';
+  }
+
+  /// Increment category usage count
+  Future<void> incrementCategoryUsage(String categoryId) async {
+    if (!isInitialized || _localDatabase == null) return;
+
+    try {
+      await _localDatabase!.update(
+        'categories',
+        {
+          'usage_count': 'usage_count + 1',
+          'last_used': DateTime.now().millisecondsSinceEpoch,
+          'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [categoryId],
+      );
+    } catch (e) {
+      debugPrint('❌ Error incrementing category usage: $e');
+    }
+  }
+
+  /// Helper method to get owner ID based on ownership type
+  String _getCurrentOwnerCategoryId(CategoryOwnershipType ownershipType) {
+    if (ownershipType == CategoryOwnershipType.shared &&
+        partnershipId != null) {
+      return partnershipId!;
+    }
+    return currentUserId ?? '';
+  }
+
+  Future<void> addCategory({
+    required String name,
+    required String type,
+    required CategoryOwnershipType ownershipType,
+    int? iconCodePoint,
+    Map<String, String>? subCategories,
+    String? ownerId,
+  }) async {
+    if (!isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    final categoryId =
+        'cat_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(9999)}';
+    final finalOwnerId = ownerId ?? _getCurrentOwnerCateId(ownershipType);
+
+    await _localDatabase!.transaction((txn) async {
+      await txn.insert('categories', {
+        'id': categoryId,
+        'name': name.trim(),
+        'owner_id': finalOwnerId,
+        'type': type,
+        'icon_code_point': iconCodePoint,
+        'sub_categories': jsonEncode(subCategories ?? {}),
+        'ownership_type': ownershipType.name,
+        'created_by': currentUserId,
+        'is_archived': 0,
+        'usage_count': 0,
+        'sync_status': 0, // Unsynced
+        'version': 1,
+      });
+
+      await _addToSyncQueue(txn, 'categories', categoryId, 'INSERT', {
+        'name': name.trim(),
+        'ownerId': finalOwnerId,
+        'type': type,
+        'iconCodePoint': iconCodePoint,
+        'subCategories': subCategories ?? {},
+        'ownershipType': ownershipType.name,
+        'createdBy': currentUserId,
+      }, priority: 2);
+    });
+
+    if (isOnline) {
+      unawaited(_syncSingleRecord('categories', categoryId));
+    }
+
+    notifyListeners();
+    debugPrint('✅ Category added: $name');
+  }
+
+  /// Update category with offline-first support
+  Future<void> updateCategory(Category category) async {
+    if (!isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    await _localDatabase!.transaction((txn) async {
+      await txn.update(
+        'categories',
+        {
+          'name': category.name,
+          'type': category.type,
+          'icon_code_point': category.iconCodePoint,
+          'sub_categories': jsonEncode(category.subCategories),
+          'ownership_type': category.ownershipType.name,
+          'is_archived': category.isArchived ? 1 : 0,
+          'usage_count': category.usageCount,
+          'last_used': category.lastUsed?.millisecondsSinceEpoch,
+          'sync_status': 0, // Mark as unsynced
+          'version': category.version + 1,
+          'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [category.id],
+      );
+
+      await _addToSyncQueue(
+        txn,
+        'categories',
+        category.id,
+        'UPDATE',
+        category.toJson(),
+        priority: 2,
+      );
+    });
+
+    if (isOnline) {
+      unawaited(_syncSingleRecord('categories', category.id));
+    }
+
+    notifyListeners();
+  }
+
+  /// Delete category with offline-first support (soft delete)
+  Future<void> deleteCategory(String categoryId) async {
+    if (!isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    await _localDatabase!.transaction((txn) async {
+      // Soft delete
+      await txn.update(
+        'categories',
+        {
+          'is_archived': 1,
+          'sync_status': 0,
+          'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [categoryId],
+      );
+
+      await _addToSyncQueue(txn, 'categories', categoryId, 'DELETE', {
+        'id': categoryId,
+      }, priority: 2);
+    });
+
+    if (isOnline) {
+      unawaited(_syncSingleRecord('categories', categoryId));
+    }
+
+    notifyListeners();
+  }
+
+  // 🔥 PRIORITY 3: Add basic reporting methods (ADD new methods)
+
+  /// Get dashboard summary data
+  Future<Map<String, dynamic>> getDashboardSummary({
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    if (!isInitialized || _localDatabase == null) {
+      return {};
+    }
+
+    final start =
+        startDate ?? DateTime.now().subtract(const Duration(days: 30));
+    final end = endDate ?? DateTime.now();
+
+    try {
+      // Get transactions for period
+      final transactions = await getTransactions(
+        startDate: start,
+        endDate: end,
+      );
+
+      // Calculate totals
+      double totalIncome = 0;
+      double totalExpense = 0;
+      int incomeTransactionCount = 0;
+      int expenseTransactionCount = 0;
+
+      for (final transaction in transactions) {
+        if (transaction.type == TransactionType.income) {
+          totalIncome += transaction.amount;
+          incomeTransactionCount++;
+        } else if (transaction.type == TransactionType.expense) {
+          totalExpense += transaction.amount;
+          expenseTransactionCount++;
+        }
+      }
+
+      // Get wallet balances
+      final wallets = await getWallets();
+      final totalBalance = wallets.fold(0.0, (sum, w) => sum + w.balance);
+
+      // Get budget info for current month
+      final currentMonth = DateTime.now().toIso8601String().substring(0, 7);
+      final budgets = await getBudgets(month: currentMonth);
+      final totalBudget = budgets.fold(0.0, (sum, b) => sum + b.totalAmount);
+
+      // Calculate budget used from current month expenses
+      final monthStart = DateTime(DateTime.now().year, DateTime.now().month, 1);
+      final monthTransactions = await getTransactions(
+        startDate: monthStart,
+        endDate: DateTime.now(),
+      );
+      final monthlyExpense = monthTransactions
+          .where((t) => t.type == TransactionType.expense)
+          .fold(0.0, (sum, t) => sum + t.amount);
+
+      return {
+        'period': {
+          'start': start.toIso8601String(),
+          'end': end.toIso8601String(),
+          'days': end.difference(start).inDays,
+        },
+        'totals': {
+          'income': totalIncome,
+          'expense': totalExpense,
+          'netAmount': totalIncome - totalExpense,
+          'balance': totalBalance,
+        },
+        'transactions': {
+          'total': transactions.length,
+          'income': incomeTransactionCount,
+          'expense': expenseTransactionCount,
+        },
+        'budget': {
+          'total': totalBudget,
+          'used': monthlyExpense,
+          'remaining': totalBudget - monthlyExpense,
+          'usagePercentage': totalBudget > 0
+              ? (monthlyExpense / totalBudget * 100)
+              : 0,
+        },
+        'averages': {
+          'dailyIncome': totalIncome / end.difference(start).inDays,
+          'dailyExpense': totalExpense / end.difference(start).inDays,
+          'transactionAmount': transactions.isNotEmpty
+              ? (totalIncome + totalExpense) / transactions.length
+              : 0,
+        },
+      };
+    } catch (e) {
+      debugPrint('❌ Error getting dashboard summary: $e');
+      return {};
+    }
+  }
+
+  /// Get expense breakdown by category
+  Future<Map<String, double>> getExpenseByCategory({
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    if (!isInitialized || _localDatabase == null) {
+      return {};
+    }
+
+    final start =
+        startDate ?? DateTime.now().subtract(const Duration(days: 30));
+    final end = endDate ?? DateTime.now();
+
+    try {
+      final query = '''
+        SELECT 
+          COALESCE(c.name, t.category_name, 'Khác') as category_name,
+          SUM(t.amount) as total
+        FROM transactions t
+        LEFT JOIN categories c ON t.category_id = c.id
+        WHERE t.type = 'expense' 
+          AND t.date >= ? AND t.date <= ?
+          AND t.user_id = ?
+        GROUP BY COALESCE(c.name, t.category_name, 'Khác')
+        ORDER BY total DESC
+      ''';
+
+      final result = await _localDatabase!.rawQuery(query, [
+        start.toIso8601String(),
+        end.toIso8601String(),
+        currentUserId,
+      ]);
+
+      final expenseMap = <String, double>{};
+      for (final row in result) {
+        expenseMap[row['category_name'] as String] = (row['total'] as num)
+            .toDouble();
+      }
+
+      return expenseMap;
+    } catch (e) {
+      debugPrint('❌ Error getting expense by category: $e');
+      return {};
+    }
+  }
+
+  /// Get income breakdown by category
+  Future<Map<String, double>> getIncomeByCategory({
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    if (!isInitialized || _localDatabase == null) {
+      return {};
+    }
+
+    final start =
+        startDate ?? DateTime.now().subtract(const Duration(days: 30));
+    final end = endDate ?? DateTime.now();
+
+    try {
+      final query = '''
+        SELECT 
+          COALESCE(c.name, t.category_name, 'Khác') as category_name,
+          SUM(t.amount) as total
+        FROM transactions t
+        LEFT JOIN categories c ON t.category_id = c.id
+        WHERE t.type = 'income' 
+          AND t.date >= ? AND t.date <= ?
+          AND t.user_id = ?
+        GROUP BY COALESCE(c.name, t.category_name, 'Khác')
+        ORDER BY total DESC
+      ''';
+
+      final result = await _localDatabase!.rawQuery(query, [
+        start.toIso8601String(),
+        end.toIso8601String(),
+        currentUserId,
+      ]);
+
+      final incomeMap = <String, double>{};
+      for (final row in result) {
+        incomeMap[row['category_name'] as String] = (row['total'] as num)
+            .toDouble();
+      }
+
+      return incomeMap;
+    } catch (e) {
+      debugPrint('❌ Error getting income by category: $e');
+      return {};
+    }
+  }
+
+  /// Get monthly trends
+  Future<List<Map<String, dynamic>>> getMonthlyTrends({
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    if (!isInitialized || _localDatabase == null) {
+      return [];
+    }
+
+    final start =
+        startDate ??
+        DateTime.now().subtract(const Duration(days: 180)); // 6 months
+    final end = endDate ?? DateTime.now();
+
+    try {
+      final query = '''
+        SELECT 
+          strftime('%Y-%m', date) as month,
+          type,
+          SUM(amount) as total,
+          COUNT(*) as count
+        FROM transactions
+        WHERE date >= ? AND date <= ? AND user_id = ?
+        GROUP BY strftime('%Y-%m', date), type
+        ORDER BY month ASC
+      ''';
+
+      final result = await _localDatabase!.rawQuery(query, [
+        start.toIso8601String(),
+        end.toIso8601String(),
+        currentUserId,
+      ]);
+
+      final trendsMap = <String, Map<String, dynamic>>{};
+
+      for (final row in result) {
+        final month = row['month'] as String;
+        final type = row['type'] as String;
+        final amount = (row['total'] as num).toDouble();
+        final count = row['count'] as int;
+
+        if (!trendsMap.containsKey(month)) {
+          trendsMap[month] = {
+            'month': month,
+            'income': 0.0,
+            'expense': 0.0,
+            'incomeCount': 0,
+            'expenseCount': 0,
+          };
+        }
+
+        trendsMap[month]![type] = amount;
+        trendsMap[month]!['${type}Count'] = count;
+      }
+
+      // Add calculated fields
+      for (final trend in trendsMap.values) {
+        trend['netAmount'] = trend['income'] - trend['expense'];
+        trend['totalTransactions'] =
+            trend['incomeCount'] + trend['expenseCount'];
+      }
+
+      final trends = trendsMap.values.toList();
+      trends.sort(
+        (a, b) => (a['month'] as String).compareTo(b['month'] as String),
+      );
+
+      return trends;
+    } catch (e) {
+      debugPrint('❌ Error getting monthly trends: $e');
+      return [];
+    }
+  }
+
+  // 🔥 PRIORITY 4: Fix Firebase sync methods (REPLACE existing methods)
+
+  /// FIXED: Safe category insertion from Firebase
+  Future<void> _insertCategoryFromFirebase(
+    Transaction txn,
+    String firebaseId,
+    Map<dynamic, dynamic> firebaseData,
+  ) async {
+    try {
+      // ✅ FIX: Validate required fields
+      final name = (firebaseData['name'] as String?)?.trim();
+      final ownerId = (firebaseData['ownerId'] as String?)?.trim();
+      final type = (firebaseData['type'] as String?)?.trim();
+
+      // Skip invalid data
+      if (name == null || name.isEmpty) {
+        debugPrint('⚠️ Skipping category with empty name: $firebaseId');
+        return;
+      }
+
+      if (ownerId == null || ownerId.isEmpty) {
+        debugPrint('⚠️ Skipping category with empty ownerId: $firebaseId');
+        return;
+      }
+
+      if (type == null || !['income', 'expense'].contains(type)) {
+        debugPrint(
+          '⚠️ Skipping category with invalid type: $firebaseId ($type)',
+        );
+        return;
+      }
+
+      // Check if already exists to prevent duplicates
+      final existing = await txn.query(
+        'categories',
+        where: 'firebase_id = ? OR id = ?',
+        whereArgs: [firebaseId, firebaseData['id']],
+        limit: 1,
+      );
+
+      if (existing.isNotEmpty) {
+        // Update existing
+        await txn.update(
+          'categories',
+          {
+            'name': name,
+            'owner_id': ownerId,
+            'type': type,
+            'icon_code_point': firebaseData['iconCodePoint'],
+            'sub_categories': jsonEncode(firebaseData['subCategories'] ?? {}),
+            'ownership_type': firebaseData['ownershipType'] ?? 'personal',
+            'created_by': firebaseData['createdBy'],
+            'is_archived': (firebaseData['isArchived'] ?? false) ? 1 : 0,
+            'usage_count': firebaseData['usageCount'] ?? 0,
+            'last_used': firebaseData['lastUsed'],
+            'sync_status': 1, // Synced
+            'version': firebaseData['version'] ?? 1,
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'firebase_id = ?',
+          whereArgs: [firebaseId],
+        );
+        debugPrint('✅ Updated existing category: $name');
+        return;
+      }
+
+      // Insert new category with validated data
+      await txn.insert('categories', {
+        'id': firebaseData['id'] ?? firebaseId,
+        'firebase_id': firebaseId,
+        'name': name, // ✅ VALIDATED: Non-empty
+        'owner_id': ownerId, // ✅ VALIDATED: Non-empty
+        'type': type, // ✅ VALIDATED: Valid type
+        'icon_code_point': firebaseData['iconCodePoint'],
+        'sub_categories': jsonEncode(firebaseData['subCategories'] ?? {}),
+        'ownership_type': firebaseData['ownershipType'] ?? 'personal',
+        'created_by': firebaseData['createdBy'],
+        'is_archived': (firebaseData['isArchived'] ?? false) ? 1 : 0,
+        'usage_count': firebaseData['usageCount'] ?? 0,
+        'last_used': firebaseData['lastUsed'],
+        'sync_status': 1, // Synced
+        'version': firebaseData['version'] ?? 1,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+      debugPrint('✅ Inserted valid category from Firebase: $name');
+    } catch (e) {
+      debugPrint('❌ Error inserting category from Firebase ($firebaseId): $e');
+    }
+  }
+
+  /// FIXED: Safe wallet insertion from Firebase
+  Future<void> _insertWalletFromFirebase(
+    Transaction txn,
+    String firebaseId,
+    Map<dynamic, dynamic> firebaseData,
+  ) async {
+    try {
+      // ✅ FIX: Validate required fields
+      final name = (firebaseData['name'] as String?)?.trim();
+      final ownerId = (firebaseData['ownerId'] as String?)?.trim();
+
+      // Skip invalid data
+      if (name == null || name.isEmpty) {
+        debugPrint('⚠️ Skipping wallet with empty name: $firebaseId');
+        return;
+      }
+
+      if (ownerId == null || ownerId.isEmpty) {
+        debugPrint('⚠️ Skipping wallet with empty ownerId: $firebaseId');
+        return;
+      }
+
+      // Check if already exists
+      final existing = await txn.query(
+        'wallets',
+        where: 'firebase_id = ? OR id = ?',
+        whereArgs: [firebaseId, firebaseData['id']],
+        limit: 1,
+      );
+
+      if (existing.isNotEmpty) {
+        // Update existing
+        await txn.update(
+          'wallets',
+          {
+            'name': name,
+            'balance': (firebaseData['balance'] ?? 0).toDouble(),
+            'owner_id': ownerId,
+            'is_visible_to_partner':
+                (firebaseData['isVisibleToPartner'] ?? true) ? 1 : 0,
+            'wallet_type': firebaseData['type'] ?? 'general',
+            'is_archived': (firebaseData['isArchived'] ?? false) ? 1 : 0,
+            'sync_status': 1, // Synced
+            'version': firebaseData['version'] ?? 1,
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'firebase_id = ?',
+          whereArgs: [firebaseId],
+        );
+        debugPrint('✅ Updated existing wallet: $name');
+        return;
+      }
+
+      // Insert new wallet with validated data
+      await txn.insert('wallets', {
+        'id': firebaseData['id'] ?? firebaseId,
+        'firebase_id': firebaseId,
+        'name': name, // ✅ VALIDATED: Non-empty
+        'balance': (firebaseData['balance'] ?? 0).toDouble(),
+        'owner_id': ownerId, // ✅ VALIDATED: Non-empty
+        'is_visible_to_partner': (firebaseData['isVisibleToPartner'] ?? true)
+            ? 1
+            : 0,
+        'wallet_type': firebaseData['type'] ?? 'general',
+        'currency': 'VND',
+        'is_archived': (firebaseData['isArchived'] ?? false) ? 1 : 0,
+        'sync_status': 1, // Synced
+        'version': firebaseData['version'] ?? 1,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+      debugPrint('✅ Inserted valid wallet from Firebase: $name');
+    } catch (e) {
+      debugPrint('❌ Error inserting wallet from Firebase ($firebaseId): $e');
+    }
+  }
+
+  // 🔥 PRIORITY 5: Add helper method for ownership
+  String _getCurrentOwnerCateId(CategoryOwnershipType ownershipType) {
+    if (ownershipType == CategoryOwnershipType.shared &&
+        partnershipId != null) {
+      return partnershipId!;
+    }
+    return currentUserId ?? '';
+  }
+
+  // 🔥 PRIORITY 6: Add basic smart suggestions (ADD new methods)
+
+  /// Get transaction suggestions based on history
+  Future<List<Map<String, dynamic>>> getTransactionSuggestions({
+    int limit = 10,
+  }) async {
+    if (!isInitialized || _localDatabase == null || currentUserId == null) {
+      return [];
+    }
+
+    try {
+      final query = '''
+        SELECT 
+          description, 
+          category_id, 
+          category_name,
+          AVG(amount) as avg_amount, 
+          COUNT(*) as frequency,
+          MAX(date) as last_used
+        FROM transactions
+        WHERE user_id = ? AND date >= date('now', '-30 days')
+        GROUP BY LOWER(description), category_id
+        HAVING frequency >= 2
+        ORDER BY frequency DESC, avg_amount DESC
+        LIMIT ?
+      ''';
+
+      final result = await _localDatabase!.rawQuery(query, [
+        currentUserId,
+        limit,
+      ]);
+
+      final suggestions = <Map<String, dynamic>>[];
+      for (final row in result) {
+        final frequency = row['frequency'] as int;
+        final confidence = (frequency / 10).clamp(0.1, 1.0);
+
+        suggestions.add({
+          'description': row['description'] as String,
+          'categoryId': row['category_id'] as String?,
+          'categoryName': row['category_name'] as String?,
+          'suggestedAmount': (row['avg_amount'] as num).toDouble(),
+          'frequency': frequency,
+          'confidence': confidence,
+          'lastUsed': row['last_used'] as String?,
+          'reason': frequency > 5
+              ? 'Thường xuyên sử dụng'
+              : 'Đã sử dụng gần đây',
+        });
+      }
+
+      return suggestions;
+    } catch (e) {
+      debugPrint('❌ Error getting transaction suggestions: $e');
+      return [];
+    }
+  }
+
+  /// Get amount suggestions for a description
+  Future<List<double>> getAmountSuggestions(String description) async {
+    if (!isInitialized || _localDatabase == null || currentUserId == null) {
+      return [];
+    }
+
+    try {
+      final query = '''
+        SELECT amount, COUNT(*) as frequency
+        FROM transactions
+        WHERE user_id = ? AND LOWER(description) LIKE LOWER(?) 
+          AND date >= date('now', '-90 days')
+        GROUP BY amount
+        ORDER BY frequency DESC, amount DESC
+        LIMIT 5
+      ''';
+
+      final result = await _localDatabase!.rawQuery(query, [
+        currentUserId,
+        '%${description.toLowerCase()}%',
+      ]);
+
+      return result.map((row) => (row['amount'] as num).toDouble()).toList();
+    } catch (e) {
+      debugPrint('❌ Error getting amount suggestions: $e');
+      return [];
+    }
+  }
+
+  /// Get description suggestions based on category
+  Future<List<String>> getDescriptionSuggestions(String? categoryId) async {
+    if (!isInitialized || _localDatabase == null || currentUserId == null) {
+      return [];
+    }
+
+    try {
+      String query;
+      List<dynamic> args;
+
+      if (categoryId != null && categoryId.isNotEmpty) {
+        query = '''
+          SELECT description, COUNT(*) as frequency
+          FROM transactions
+          WHERE user_id = ? AND category_id = ?
+            AND date >= date('now', '-60 days')
+            AND description != ''
+          GROUP BY LOWER(description)
+          ORDER BY frequency DESC
+          LIMIT 10
+        ''';
+        args = [currentUserId, categoryId];
+      } else {
+        query = '''
+          SELECT description, COUNT(*) as frequency
+          FROM transactions
+          WHERE user_id = ? AND date >= date('now', '-60 days')
+            AND description != ''
+          GROUP BY LOWER(description)
+          ORDER BY frequency DESC
+          LIMIT 15
+        ''';
+        args = [currentUserId];
+      }
+
+      final result = await _localDatabase!.rawQuery(query, args);
+      return result.map((row) => row['description'] as String).toList();
+    } catch (e) {
+      debugPrint('❌ Error getting description suggestions: $e');
+      return [];
+    }
   }
 
   @override

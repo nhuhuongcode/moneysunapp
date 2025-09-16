@@ -417,7 +417,7 @@ class _CurrencyInputFormatter extends TextInputFormatter {
 
 // Helper function to parse amount
 double parseAmount(String text) {
-  String cleaned = text.replaceAll(RegExp(r'[^\d.]'), '');
+  String cleaned = text.replaceAll(RegExp(r'[^0-9]'), '');
   return double.tryParse(cleaned) ?? 0;
 }
 

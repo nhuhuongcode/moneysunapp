@@ -87,7 +87,6 @@ class CategoryProvider extends ChangeNotifier {
     }
   }
 
-  /// ✅ Enhanced: Add category with proper validation
   Future<bool> addCategory({
     required String name,
     required String type,
@@ -98,7 +97,7 @@ class CategoryProvider extends ChangeNotifier {
   }) async {
     _clearError();
 
-    // ✅ Validate input parameters
+    // Validation
     if (name.trim().isEmpty) {
       _setError('Tên danh mục không được để trống');
       return false;
@@ -125,57 +124,65 @@ class CategoryProvider extends ChangeNotifier {
       return false;
     }
 
-    final finalOwnerId = ownerId ?? _getCurrentOwnerId(ownershipType);
-
-    // Create temporary category for optimistic update
-    final tempCategory = Category(
-      id: 'temp_${DateTime.now().millisecondsSinceEpoch}',
-      name: name.trim(),
-      ownerId: finalOwnerId,
-      type: type,
-      iconCodePoint: iconCodePoint,
-      subCategories: subCategories ?? {},
-      ownershipType: ownershipType,
-      createdBy: _userProvider.currentUser?.uid,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    );
-
     try {
       debugPrint('➕ Adding category: $name ($type, ${ownershipType.name})');
 
-      // Optimistic update
-      _categories.add(tempCategory);
-      _sortCategories();
-      notifyListeners();
-
-      // TODO: Implement addCategory in DataService
-      // For now, simulate success
-      await Future.delayed(const Duration(milliseconds: 500));
-      debugPrint(
-        '⚠️ Category creation simulated - DataService.addCategory needed',
+      // ✅ FIXED: Use real DataService method instead of simulation
+      await _dataService.addCategory(
+        name: name.trim(),
+        type: type,
+        ownershipType: ownershipType,
+        iconCodePoint: iconCodePoint,
+        subCategories: subCategories,
+        ownerId: ownerId,
       );
 
-      // Remove temp category - in real implementation, reload from DataService
-      _categories.removeWhere((c) => c.id == tempCategory.id);
-
-      // Add with real ID for demo
-      final realCategory = tempCategory.copyWith(
-        id: 'cat_${DateTime.now().millisecondsSinceEpoch}',
-      );
-      _categories.add(realCategory);
-      _sortCategories();
+      // Reload categories from database
+      await loadCategories(forceRefresh: true);
 
       debugPrint('✅ Category added successfully');
       return true;
     } catch (e) {
-      // Revert optimistic update
-      _categories.removeWhere((c) => c.id == tempCategory.id);
-      _sortCategories();
-
       _setError('Không thể thêm danh mục: $e');
       debugPrint('❌ Error adding category: $e');
-      notifyListeners();
+      return false;
+    }
+  }
+
+  /// ✅ FIXED: Update category with real implementation
+  Future<bool> updateCategory(Category category) async {
+    _clearError();
+
+    try {
+      debugPrint('📝 Updating category: ${category.id}');
+
+      await _dataService.updateCategory(category);
+      await loadCategories(forceRefresh: true);
+
+      debugPrint('✅ Category updated successfully');
+      return true;
+    } catch (e) {
+      _setError('Không thể cập nhật danh mục: $e');
+      debugPrint('❌ Error updating category: $e');
+      return false;
+    }
+  }
+
+  /// ✅ FIXED: Delete category with real implementation
+  Future<bool> deleteCategory(String categoryId) async {
+    _clearError();
+
+    try {
+      debugPrint('🗑️ Deleting category: $categoryId');
+
+      await _dataService.deleteCategory(categoryId);
+      await loadCategories(forceRefresh: true);
+
+      debugPrint('✅ Category deleted successfully');
+      return true;
+    } catch (e) {
+      _setError('Không thể xóa danh mục: $e');
+      debugPrint('❌ Error deleting category: $e');
       return false;
     }
   }

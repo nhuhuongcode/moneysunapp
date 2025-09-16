@@ -982,7 +982,6 @@ class _ManageWalletsScreenState extends State<ManageWalletsScreen>
       debugPrint('🔍 Parsing amount from: "$balanceText"');
 
       final balance = _parseAmountSafely(balanceText);
-      debugPrint('💰 Parsed amount: $balance');
 
       final userProvider = context.read<UserProvider>();
       final String? ownerId =

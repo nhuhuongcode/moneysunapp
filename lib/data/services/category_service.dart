@@ -108,9 +108,6 @@ class CategoryService {
     try {
       debugPrint('➕ Creating category: $name ($ownershipType)');
 
-      final categoryId =
-          'cat_${DateTime.now().millisecondsSinceEpoch}_${name.hashCode.abs()}';
-
       String ownerId;
       if (ownershipType == CategoryOwnershipType.shared) {
         if (!userProvider.hasPartner) {
@@ -121,28 +118,43 @@ class CategoryService {
         ownerId = userProvider.currentUser!.uid;
       }
 
-      // Create category using DataService's internal structure
-      // Since DataService doesn't expose addCategory method yet, we'll use the addTransaction pattern
-      // For now, we'll use a placeholder and you should add addCategory method to DataService
-
-      // TODO: Add this method to DataService
-      // await _dataService.addCategory(category);
-
-      // Temporary workaround - manually insert category data
-      await _createCategoryDirectly(
-        categoryId: categoryId,
+      // ✅ FIXED: Use real DataService method
+      await _dataService.addCategory(
         name: name,
         type: type,
-        ownerId: ownerId,
         ownershipType: ownershipType,
-        userProvider: userProvider,
         iconCodePoint: iconCodePoint,
         subCategories: subCategories,
+        ownerId: ownerId,
       );
 
       debugPrint('✅ Category created successfully');
     } catch (e) {
       debugPrint('❌ Error creating category: $e');
+      rethrow;
+    }
+  }
+
+  /// ✅ FIXED: Real implementation for update
+  Future<void> updateCategory(Category category) async {
+    try {
+      debugPrint('✏️ Updating category: ${category.name}');
+      await _dataService.updateCategory(category);
+      debugPrint('✅ Category updated successfully');
+    } catch (e) {
+      debugPrint('❌ Error updating category: $e');
+      rethrow;
+    }
+  }
+
+  /// ✅ FIXED: Real implementation for delete
+  Future<void> deleteCategory(String categoryId) async {
+    try {
+      debugPrint('🗑️ Deleting category: $categoryId');
+      await _dataService.deleteCategory(categoryId);
+      debugPrint('✅ Category deleted successfully');
+    } catch (e) {
+      debugPrint('❌ Error deleting category: $e');
       rethrow;
     }
   }
@@ -182,40 +194,6 @@ class CategoryService {
 
     // TODO: Implement in DataService
     // throw UnimplementedError('DataService.addCategory method needed');
-  }
-
-  /// Update category
-  Future<void> updateCategory(Category category) async {
-    try {
-      debugPrint('✏️ Updating category: ${category.name}');
-
-      // TODO: Implement in DataService
-      // await _dataService.updateCategory(category);
-
-      debugPrint(
-        '⚠️ Category update deferred until DataService.updateCategory is implemented',
-      );
-    } catch (e) {
-      debugPrint('❌ Error updating category: $e');
-      rethrow;
-    }
-  }
-
-  /// Delete category
-  Future<void> deleteCategory(String categoryId) async {
-    try {
-      debugPrint('🗑️ Deleting category: $categoryId');
-
-      // TODO: Implement in DataService
-      // await _dataService.deleteCategory(categoryId);
-
-      debugPrint(
-        '⚠️ Category deletion deferred until DataService.deleteCategory is implemented',
-      );
-    } catch (e) {
-      debugPrint('❌ Error deleting category: $e');
-      rethrow;
-    }
   }
 
   /// Get category by ID
