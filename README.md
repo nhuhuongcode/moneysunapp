@@ -14,8 +14,6 @@
   * Theo từng danh mục, có thể drill-down xem chi tiết.
   * Hiển thị biểu đồ trực quan (chart, line chart, pie chart).
 * **Ngân sách**: Đặt ngân sách tổng hoặc cho từng danh mục, thể hiện % đã chi.
-* **Gợi ý nhập liệu**: Gợi ý mô tả từ các mô tả đã nhập trước, gợi ý số tiền theo định dạng.
-
 ---
 
 ### 2. Chức năng cộng tác (Partner)
@@ -26,6 +24,7 @@
   * Sau khi chấp nhận: cả hai cùng quản lý và chia sẻ dữ liệu.
 * **Quyền hiển thị nguồn tiền**: Người dùng chọn ví nào visible hoặc ẩn với partner.
 * **Nguồn tiền chung**: Có thể tạo ví chung & ngân sách chung, giao dịch từ ví chung sẽ được cả hai thấy.
+* **Danh mục chung**: Có thể tạo danh mục chung để người dùng và partner sử dụng chung.
 * **Tổng hợp**:
 
   * Thấy được tổng thu/chi cá nhân và tổng hợp với partner.
@@ -53,15 +52,11 @@
 ### 4. Kỹ thuật & vận hành
 
 * **Cơ sở dữ liệu**:
-
-  * Sử dụng **Firebase Realtime Database** để đồng bộ.
   * Có **database local offline** để dùng nhanh, khi có mạng sẽ tự động sync.
+  *   * Sử dụng **Firebase Realtime Database** để đồng bộ.
 * **Xử lý nhập liệu**:
 
   * Keyboard không che input.
+  * Gợi ý hoàn thành số tiền người dùng nhập. Ví dụ người dùng nhập 11 sẽ gợi í 11.000, 110.000, 1.100.000; tương tự 12: 12.000, 120.000, 1.200.000
   * Tự động phân cách số tiền bằng dấu `.` khi nhập.
-
----
-
-
-Bạn có muốn mình vẽ **sơ đồ tổng quan kiến trúc (modules & flow giữa các màn hình)** để dễ hình dung hơn không?
+  * Sử dụng autocomplete của flutter để gợi ý nhập description(từ dữ liệu mô tả đã nhập trước đó) cho mô tả.
