@@ -1,4 +1,3 @@
-// lib/presentation/screens/profile_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -28,6 +27,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   final AuthService _authService = AuthService();
   final _inviteCodeController = TextEditingController();
 
+  // Animation controllers
   late AnimationController _fadeController;
   late AnimationController _slideController;
   late AnimationController _pulseController;
@@ -35,6 +35,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   late Animation<Offset> _slideAnimation;
   late Animation<double> _pulseAnimation;
 
+  // State variables
   bool _isLoading = false;
   String? _currentInviteCode;
   bool _isGeneratingCode = false;
@@ -45,6 +46,8 @@ class _ProfileScreenState extends State<ProfileScreen>
     _initializeAnimations();
     _loadCurrentInviteCode();
   }
+
+  // ============ ANIMATION SETUP ============
 
   void _initializeAnimations() {
     _fadeController = AnimationController(
@@ -79,17 +82,27 @@ class _ProfileScreenState extends State<ProfileScreen>
     _pulseController.repeat(reverse: true);
   }
 
+  // ============ INITIALIZATION ============
+
   Future<void> _loadCurrentInviteCode() async {
     final userProvider = Provider.of<UserProvider>(context, listen: false);
     if (!userProvider.hasPartner) {
-      final code = await _partnershipService.getActiveInviteCode(userProvider);
-      if (mounted) {
-        setState(() {
-          _currentInviteCode = code;
-        });
+      try {
+        final code = await _partnershipService.getActiveInviteCode(
+          userProvider,
+        );
+        if (mounted) {
+          setState(() {
+            _currentInviteCode = code;
+          });
+        }
+      } catch (e) {
+        debugPrint('Error loading invite code: $e');
       }
     }
   }
+
+  // ============ MAIN BUILD METHOD ============
 
   @override
   Widget build(BuildContext context) {
@@ -178,6 +191,8 @@ class _ProfileScreenState extends State<ProfileScreen>
       ),
     );
   }
+
+  // ============ WIDGET BUILDERS ============
 
   Widget _buildAnimatedCard({required Widget child, required int delay}) {
     return TweenAnimationBuilder<double>(
@@ -279,149 +294,145 @@ class _ProfileScreenState extends State<ProfileScreen>
   Widget _buildUserProfileCard(UserProvider userProvider) {
     final user = userProvider.currentUser;
 
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 120, maxHeight: 200),
-      child: Card(
-        elevation: 6,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        clipBehavior: Clip.antiAlias,
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Theme.of(context).primaryColor.withOpacity(0.05),
-                Colors.transparent,
-              ],
-            ),
+    return Card(
+      elevation: 6,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Theme.of(context).primaryColor.withOpacity(0.05),
+              Colors.transparent,
+            ],
           ),
-          child: Row(
-            children: [
-              // Avatar
-              Hero(
-                tag: 'user_avatar',
-                child: AnimatedBuilder(
-                  animation: _pulseAnimation,
-                  builder: (context, child) {
-                    return Transform.scale(
-                      scale: _pulseAnimation.value,
-                      child: Container(
-                        width: 80,
-                        height: 80,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: LinearGradient(
-                            colors: [
-                              Theme.of(context).primaryColor,
-                              Theme.of(context).primaryColor.withOpacity(0.7),
-                            ],
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Theme.of(
-                                context,
-                              ).primaryColor.withOpacity(0.3),
-                              blurRadius: 12,
-                              offset: const Offset(0, 4),
-                            ),
+        ),
+        child: Row(
+          children: [
+            // Avatar
+            Hero(
+              tag: 'user_avatar',
+              child: AnimatedBuilder(
+                animation: _pulseAnimation,
+                builder: (context, child) {
+                  return Transform.scale(
+                    scale: _pulseAnimation.value,
+                    child: Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          colors: [
+                            Theme.of(context).primaryColor,
+                            Theme.of(context).primaryColor.withOpacity(0.7),
                           ],
                         ),
-                        child: user?.photoURL != null
-                            ? ClipOval(
-                                child: Image.network(
-                                  user!.photoURL!,
-                                  width: 80,
-                                  height: 80,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      _buildDefaultAvatar(),
-                                ),
-                              )
-                            : _buildDefaultAvatar(),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Theme.of(
+                              context,
+                            ).primaryColor.withOpacity(0.3),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
                       ),
-                    );
-                  },
-                ),
+                      child: user?.photoURL != null
+                          ? ClipOval(
+                              child: Image.network(
+                                user!.photoURL!,
+                                width: 80,
+                                height: 80,
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) =>
+                                    _buildDefaultAvatar(),
+                              ),
+                            )
+                          : _buildDefaultAvatar(),
+                    ),
+                  );
+                },
               ),
+            ),
 
-              const SizedBox(width: 20),
+            const SizedBox(width: 20),
 
-              // User Info
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      user?.displayName ?? 'Người dùng',
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+            // User Info
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    user?.displayName ?? 'Người dùng',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      user?.email ?? 'Chưa có email',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.grey.shade600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    user?.email ?? 'Chưa có email',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.grey.shade600,
                     ),
-                    const SizedBox(height: 12),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 12),
 
-                    // Partnership status indicator
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
+                  // Partnership status indicator
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: userProvider.hasPartner
+                          ? Colors.green.withOpacity(0.1)
+                          : Colors.orange.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
                         color: userProvider.hasPartner
-                            ? Colors.green.withOpacity(0.1)
-                            : Colors.orange.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: userProvider.hasPartner
-                              ? Colors.green.withOpacity(0.3)
-                              : Colors.orange.withOpacity(0.3),
-                        ),
+                            ? Colors.green.withOpacity(0.3)
+                            : Colors.orange.withOpacity(0.3),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            userProvider.hasPartner
-                                ? Icons.people
-                                : Icons.person,
-                            size: 16,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          userProvider.hasPartner ? Icons.people : Icons.person,
+                          size: 16,
+                          color: userProvider.hasPartner
+                              ? Colors.green
+                              : Colors.orange,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          userProvider.hasPartner ? 'Đã kết nối' : 'Độc lập',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
                             color: userProvider.hasPartner
                                 ? Colors.green
                                 : Colors.orange,
                           ),
-                          const SizedBox(width: 6),
-                          Text(
-                            userProvider.hasPartner ? 'Đã kết nối' : 'Độc lập',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: userProvider.hasPartner
-                                  ? Colors.green
-                                  : Colors.orange,
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -432,86 +443,78 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Widget _buildPartnershipSection(UserProvider userProvider) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 200, maxHeight: 600),
-      child: Card(
-        elevation: 6,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        clipBehavior: Clip.antiAlias,
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                userProvider.hasPartner
-                    ? Colors.green.withOpacity(0.05)
-                    : Colors.blue.withOpacity(0.05),
-                Colors.transparent,
-              ],
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: userProvider.hasPartner
-                          ? Colors.green.withOpacity(0.15)
-                          : Colors.blue.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Icon(
-                      userProvider.hasPartner ? Icons.people : Icons.person_add,
-                      color: userProvider.hasPartner
-                          ? Colors.green
-                          : Colors.blue,
-                      size: 24,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          'Quản lý chung',
-                          style: Theme.of(context).textTheme.titleLarge
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                          userProvider.hasPartner
-                              ? 'Kết nối với đối tác'
-                              : 'Chia sẻ chi tiêu với người thân',
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: Colors.grey.shade600),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 24),
-
-              // Partnership content
-              Flexible(
-                fit: FlexFit.loose,
-                child: userProvider.hasPartner
-                    ? _buildActivePartnershipContent(userProvider)
-                    : _buildInvitePartnershipContent(userProvider),
-              ),
+    return Card(
+      elevation: 6,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              userProvider.hasPartner
+                  ? Colors.green.withOpacity(0.05)
+                  : Colors.blue.withOpacity(0.05),
+              Colors.transparent,
             ],
           ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: userProvider.hasPartner
+                        ? Colors.green.withOpacity(0.15)
+                        : Colors.blue.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Icon(
+                    userProvider.hasPartner ? Icons.people : Icons.person_add,
+                    color: userProvider.hasPartner ? Colors.green : Colors.blue,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Quản lý chung',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        userProvider.hasPartner
+                            ? 'Kết nối với đối tác'
+                            : 'Chia sẻ chi tiêu với người thân',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 24),
+
+            // Partnership content
+            userProvider.hasPartner
+                ? _buildActivePartnershipContent(userProvider)
+                : _buildInvitePartnershipContent(userProvider),
+          ],
         ),
       ),
     );
@@ -519,7 +522,6 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Widget _buildActivePartnershipContent(UserProvider userProvider) {
     return Column(
-      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Partner info
@@ -532,7 +534,6 @@ class _ProfileScreenState extends State<ProfileScreen>
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
             children: [
               Row(
                 children: [
@@ -554,7 +555,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
                           userProvider.partnerDisplayName ?? 'Đối tác',
@@ -589,6 +589,29 @@ class _ProfileScreenState extends State<ProfileScreen>
                   userProvider,
                 ),
                 builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(16.0),
+                        child: CircularProgressIndicator(),
+                      ),
+                    );
+                  }
+
+                  if (snapshot.hasError) {
+                    return Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Text(
+                        'Lỗi khi tải thống kê',
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 12,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    );
+                  }
+
                   if (snapshot.hasData && snapshot.data!.isNotEmpty) {
                     final stats = snapshot.data!;
                     final duration = stats['duration'] as Map<String, dynamic>?;
@@ -599,29 +622,46 @@ class _ProfileScreenState extends State<ProfileScreen>
                         color: Colors.white.withOpacity(0.7),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Row(
+                      child: Column(
                         children: [
-                          Expanded(
-                            child: _buildStatItem(
-                              'Thời gian',
-                              '${duration?['days'] ?? 0} ngày',
-                              Icons.calendar_today,
-                              Colors.blue,
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _buildStatItem(
+                                  'Thời gian kết nối',
+                                  '${duration?['days'] ?? 0} ngày',
+                                  Icons.calendar_today,
+                                  Colors.blue,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: _buildStatItem(
+                                  'Trạng thái',
+                                  'Hoạt động',
+                                  Icons.check_circle,
+                                  Colors.green,
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: _buildStatItem(
-                              'Giao dịch',
-                              '${stats['financial']?['transactionCount'] ?? 0}',
-                              Icons.receipt,
-                              Colors.orange,
+                          if ((duration?['days'] ?? 0) > 30) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              'Đã kết nối được ${(duration?['months'] ?? 0)} tháng!',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.green.shade700,
+                              ),
+                              textAlign: TextAlign.center,
                             ),
-                          ),
+                          ],
                         ],
                       ),
                     );
                   }
+
                   return const SizedBox.shrink();
                 },
               ),
@@ -675,7 +715,6 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Widget _buildInvitePartnershipContent(UserProvider userProvider) {
     return Column(
-      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Invite code section
@@ -688,7 +727,6 @@ class _ProfileScreenState extends State<ProfileScreen>
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
             children: [
               Row(
                 children: [
@@ -718,7 +756,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                     border: Border.all(color: Colors.blue.withOpacity(0.3)),
                   ),
                   child: Column(
-                    mainAxisSize: MainAxisSize.min,
                     children: [
                       SelectableText(
                         _currentInviteCode!,
@@ -732,8 +769,11 @@ class _ProfileScreenState extends State<ProfileScreen>
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 12),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      // 👉 Dùng Wrap thay vì Row
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 12,
+                        runSpacing: 8,
                         children: [
                           TextButton.icon(
                             onPressed: () {
@@ -745,7 +785,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                             icon: const Icon(Icons.copy, size: 16),
                             label: const Text('Sao chép'),
                           ),
-                          const SizedBox(width: 16),
                           TextButton.icon(
                             onPressed: _generateNewInviteCode,
                             icon: _isGeneratingCode
@@ -761,7 +800,29 @@ class _ProfileScreenState extends State<ProfileScreen>
                               _isGeneratingCode ? 'Đang tạo...' : 'Tạo mới',
                             ),
                           ),
+                          TextButton.icon(
+                            onPressed: _cancelCurrentInviteCode,
+                            icon: const Icon(
+                              Icons.close,
+                              size: 16,
+                              color: Colors.red,
+                            ),
+                            label: const Text(
+                              'Hủy',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          ),
                         ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Mã mời có hiệu lực trong 24 giờ',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                          fontStyle: FontStyle.italic,
+                        ),
+                        textAlign: TextAlign.center,
                       ),
                     ],
                   ),
@@ -813,7 +874,6 @@ class _ProfileScreenState extends State<ProfileScreen>
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
             children: [
               Row(
                 children: [
@@ -847,6 +907,12 @@ class _ProfileScreenState extends State<ProfileScreen>
                             color: Colors.orange.withOpacity(0.3),
                           ),
                         ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(
+                            color: Colors.orange.withOpacity(0.3),
+                          ),
+                        ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                           borderSide: const BorderSide(
@@ -854,9 +920,33 @@ class _ProfileScreenState extends State<ProfileScreen>
                             width: 2,
                           ),
                         ),
+                        errorBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(
+                            color: Colors.red,
+                            width: 1,
+                          ),
+                        ),
+                        prefixIcon: const Icon(
+                          Icons.qr_code,
+                          color: Colors.orange,
+                        ),
+                        suffixIcon: _inviteCodeController.text.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  _inviteCodeController.clear();
+                                  setState(() {});
+                                },
+                              )
+                            : null,
                       ),
                       textCapitalization: TextCapitalization.characters,
                       maxLength: 6,
+                      inputFormatters: [
+                        // Only allow alphanumeric characters
+                        FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9]')),
+                      ],
                       onChanged: (value) {
                         setState(() {
                           _inviteCodeController.value = _inviteCodeController
@@ -874,7 +964,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                   const SizedBox(width: 12),
                   ElevatedButton(
                     onPressed:
-                        _isLoading || _inviteCodeController.text.length < 6
+                        _isLoading || _inviteCodeController.text.length != 6
                         ? null
                         : () => _acceptInvite(userProvider),
                     style: ElevatedButton.styleFrom(
@@ -903,6 +993,20 @@ class _ProfileScreenState extends State<ProfileScreen>
                   ),
                 ],
               ),
+
+              // Validation feedback
+              if (_inviteCodeController.text.isNotEmpty &&
+                  _inviteCodeController.text.length < 6)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'Mã mời cần đủ 6 ký tự (${_inviteCodeController.text.length}/6)',
+                    style: TextStyle(
+                      color: Colors.orange.shade600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -923,7 +1027,6 @@ class _ProfileScreenState extends State<ProfileScreen>
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, color: color, size: 20),
           const SizedBox(height: 4),
@@ -949,105 +1052,98 @@ class _ProfileScreenState extends State<ProfileScreen>
     ConnectionStatusProvider connectionStatus,
     DataService dataService,
   ) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 150, maxHeight: 300),
-      child: Card(
-        elevation: 4,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: connectionStatus.statusColor.withOpacity(0.15),
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: connectionStatus.statusColor.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    connectionStatus.isOnline
+                        ? Icons.cloud_done
+                        : Icons.cloud_off,
+                    color: connectionStatus.statusColor,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Trạng thái đồng bộ',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 16),
+
+            _buildStatusRow(
+              'Kết nối',
+              connectionStatus.statusMessage,
+              connectionStatus.statusColor,
+            ),
+            _buildStatusRow(
+              'Mục chờ đồng bộ',
+              '${connectionStatus.pendingItems}',
+              connectionStatus.pendingItems > 0 ? Colors.orange : Colors.green,
+            ),
+
+            if (connectionStatus.lastSyncTime != null)
+              _buildStatusRow(
+                'Lần cuối đồng bộ',
+                DateFormat(
+                  'dd/MM/yyyy HH:mm',
+                ).format(connectionStatus.lastSyncTime!),
+                Colors.grey,
+              ),
+
+            if (connectionStatus.lastError != null)
+              _buildStatusRow('Lỗi', connectionStatus.lastError!, Colors.red),
+
+            const SizedBox(height: 16),
+
+            // Manual sync button
+            if (!connectionStatus.isOnline || connectionStatus.pendingItems > 0)
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: connectionStatus.isSyncing
+                      ? null
+                      : () => _performManualSync(dataService),
+                  icon: connectionStatus.isSyncing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.sync),
+                  label: Text(
+                    connectionStatus.isSyncing
+                        ? 'Đang đồng bộ...'
+                        : 'Đồng bộ thủ công',
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: connectionStatus.statusColor,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Icon(
-                      connectionStatus.isOnline
-                          ? Icons.cloud_done
-                          : Icons.cloud_off,
-                      color: connectionStatus.statusColor,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    'Trạng thái đồng bộ',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 16),
-
-              _buildStatusRow(
-                'Kết nối',
-                connectionStatus.statusMessage,
-                connectionStatus.statusColor,
-              ),
-              _buildStatusRow(
-                'Mục chờ đồng bộ',
-                '${connectionStatus.pendingItems}',
-                connectionStatus.pendingItems > 0
-                    ? Colors.orange
-                    : Colors.green,
-              ),
-
-              if (connectionStatus.lastSyncTime != null)
-                _buildStatusRow(
-                  'Lần cuối đồng bộ',
-                  DateFormat(
-                    'dd/MM/yyyy HH:mm',
-                  ).format(connectionStatus.lastSyncTime!),
-                  Colors.grey,
-                ),
-
-              if (connectionStatus.lastError != null)
-                _buildStatusRow('Lỗi', connectionStatus.lastError!, Colors.red),
-
-              const SizedBox(height: 16),
-
-              // Manual sync button
-              if (!connectionStatus.isOnline ||
-                  connectionStatus.pendingItems > 0)
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: connectionStatus.isSyncing
-                        ? null
-                        : () => _performManualSync(dataService),
-                    icon: connectionStatus.isSyncing
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.sync),
-                    label: Text(
-                      connectionStatus.isSyncing
-                          ? 'Đang đồng bộ...'
-                          : 'Đồng bộ thủ công',
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: connectionStatus.statusColor,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
                   ),
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );
@@ -1083,7 +1179,6 @@ class _ProfileScreenState extends State<ProfileScreen>
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
@@ -1154,75 +1249,72 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Widget _buildStatisticsSection() {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 150, maxHeight: 250),
-      child: Consumer3<WalletProvider, TransactionProvider, CategoryProvider>(
-        builder:
-            (
-              context,
-              walletProvider,
-              transactionProvider,
-              categoryProvider,
-              child,
-            ) {
-              return Card(
-                elevation: 4,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Thống kê tổng quan',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.bold),
+    return Consumer3<WalletProvider, TransactionProvider, CategoryProvider>(
+      builder:
+          (
+            context,
+            walletProvider,
+            transactionProvider,
+            categoryProvider,
+            child,
+          ) {
+            return Card(
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Thống kê tổng quan',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildStatCard(
-                              'Số ví',
-                              '${walletProvider.walletCount}',
-                              Icons.account_balance_wallet,
-                              Colors.blue,
-                            ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildStatCard(
+                            'Số ví',
+                            '${walletProvider.walletCount}',
+                            Icons.account_balance_wallet,
+                            Colors.blue,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildStatCard(
-                              'Danh mục',
-                              '${categoryProvider.categories.length}',
-                              Icons.category,
-                              Colors.purple,
-                            ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _buildStatCard(
+                            'Danh mục',
+                            '${categoryProvider.categories.length}',
+                            Icons.category,
+                            Colors.purple,
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      _buildStatCard(
-                        'Tổng số dư',
-                        NumberFormat.currency(
-                          locale: 'vi_VN',
-                          symbol: '₫',
-                        ).format(walletProvider.totalBalance),
-                        Icons.account_balance,
-                        walletProvider.totalBalance >= 0
-                            ? Colors.green
-                            : Colors.red,
-                        isFullWidth: true,
-                      ),
-                    ],
-                  ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _buildStatCard(
+                      'Tổng số dư',
+                      NumberFormat.currency(
+                        locale: 'vi_VN',
+                        symbol: '₫',
+                      ).format(walletProvider.totalBalance),
+                      Icons.account_balance,
+                      walletProvider.totalBalance >= 0
+                          ? Colors.green
+                          : Colors.red,
+                      isFullWidth: true,
+                    ),
+                  ],
                 ),
-              );
-            },
-      ),
+              ),
+            );
+          },
     );
   }
 
@@ -1242,7 +1334,6 @@ class _ProfileScreenState extends State<ProfileScreen>
         border: Border.all(color: color.withOpacity(0.3)),
       ),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, color: color, size: 24),
           const SizedBox(height: 8),
@@ -1274,7 +1365,6 @@ class _ProfileScreenState extends State<ProfileScreen>
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         children: [
           _buildActionTile(
             Icons.backup,
@@ -1322,43 +1412,57 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Widget _buildSignOutSection() {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 60, maxHeight: 80),
-      child: Card(
-        elevation: 4,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: ListTile(
-          leading: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.red.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(Icons.logout, color: Colors.red),
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ListTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.red.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
           ),
-          title: const Text(
-            'Đăng xuất',
-            style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600),
-          ),
-          subtitle: const Text('Thoát khỏi tài khoản hiện tại'),
-          onTap: _showSignOutDialog,
+          child: const Icon(Icons.logout, color: Colors.red),
         ),
+        title: const Text(
+          'Đăng xuất',
+          style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600),
+        ),
+        subtitle: const Text('Thoát khỏi tài khoản hiện tại'),
+        onTap: _showSignOutDialog,
       ),
     );
   }
 
-  // Event handlers
+  // ============ EVENT HANDLERS ============
+
   Future<void> _generateNewInviteCode() async {
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+
+    // Check if user already has a partner
+    if (userProvider.hasPartner) {
+      _showErrorSnackBar('Bạn đã có đối tác rồi');
+      return;
+    }
+
     setState(() => _isGeneratingCode = true);
 
     try {
-      final userProvider = Provider.of<UserProvider>(context, listen: false);
+      // Cancel existing invite code if any
+      if (_currentInviteCode != null) {
+        await _partnershipService.cancelInviteCode(userProvider);
+      }
+
       final code = await _partnershipService.generateInviteCode(userProvider);
 
-      setState(() => _currentInviteCode = code);
-      _showSuccessSnackBar('Đã tạo mã mời mới!');
+      if (mounted) {
+        setState(() => _currentInviteCode = code);
+        _showSuccessSnackBar('Đã tạo mã mời mới: $code');
+      }
     } catch (e) {
-      _showErrorSnackBar('Lỗi khi tạo mã mời: $e');
+      if (mounted) {
+        _showErrorSnackBar('Lỗi khi tạo mã mời: ${_getErrorMessage(e)}');
+      }
     } finally {
       if (mounted) {
         setState(() => _isGeneratingCode = false);
@@ -1367,24 +1471,202 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _acceptInvite(UserProvider userProvider) async {
+    final inviteCode = _inviteCodeController.text.trim();
+
+    // Validate invite code format
+    if (inviteCode.length != 6) {
+      _showErrorSnackBar('Mã mời phải có 6 ký tự');
+      return;
+    }
+
+    // Check if user already has a partner
+    if (userProvider.hasPartner) {
+      _showErrorSnackBar('Bạn đã có đối tác rồi');
+      return;
+    }
+
     setState(() => _isLoading = true);
 
     try {
-      await _partnershipService.acceptInvitation(
-        _inviteCodeController.text,
-        userProvider,
+      // First validate the invite code
+      final validation = await _partnershipService.validateInviteCode(
+        inviteCode,
       );
 
-      _inviteCodeController.clear();
-      _showSuccessSnackBar('Kết nối thành công!');
-      await userProvider.refreshPartnershipData();
+      if (!validation['valid']) {
+        _showErrorSnackBar(validation['reason'] ?? 'Mã mời không hợp lệ');
+        return;
+      }
+
+      // Show confirmation dialog with inviter info
+      final shouldProceed = await _showAcceptInviteConfirmation(
+        validation['inviterName'] ?? 'Người dùng',
+        validation['inviterEmail'] ?? '',
+      );
+
+      if (!shouldProceed) return;
+
+      // Accept the invitation
+      await _partnershipService.acceptInvitation(inviteCode, userProvider);
+
+      if (mounted) {
+        _inviteCodeController.clear();
+        _showSuccessSnackBar(
+          'Kết nối thành công với ${validation['inviterName']}!',
+        );
+
+        // Refresh partnership data
+        await userProvider.refreshPartnershipData();
+
+        // Clear current invite code since we now have a partner
+        setState(() => _currentInviteCode = null);
+      }
     } catch (e) {
-      _showErrorSnackBar('Lỗi: $e');
+      if (mounted) {
+        _showErrorSnackBar('Lỗi: ${_getErrorMessage(e)}');
+      }
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  Future<void> _cancelCurrentInviteCode() async {
+    if (_currentInviteCode == null) return;
+
+    try {
+      final userProvider = Provider.of<UserProvider>(context, listen: false);
+      await _partnershipService.cancelInviteCode(userProvider);
+
+      if (mounted) {
+        setState(() => _currentInviteCode = null);
+        _showSuccessSnackBar('Đã hủy mã mời');
+      }
+    } catch (e) {
+      _showErrorSnackBar('Lỗi khi hủy mã mời: ${_getErrorMessage(e)}');
+    }
+  }
+
+  Future<bool> _showAcceptInviteConfirmation(
+    String inviterName,
+    String inviterEmail,
+  ) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: const Text('Xác nhận kết nối'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Bạn có muốn kết nối với:'),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).primaryColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Theme.of(context).primaryColor.withOpacity(0.3),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.person, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              inviterName,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (inviterEmail.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            const Icon(Icons.email, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                inviterEmail,
+                                style: TextStyle(
+                                  color: Colors.grey.shade600,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Sau khi kết nối, bạn và đối tác sẽ có thể:\n'
+                  '• Xem dữ liệu chi tiêu của nhau\n'
+                  '• Tạo ví chung và ngân sách chung\n'
+                  '• Quản lý chi tiêu gia đình cùng nhau',
+                  style: TextStyle(fontSize: 14),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Hủy'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).primaryColor,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('Kết nối'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  String _getErrorMessage(dynamic error) {
+    String errorMessage = error.toString();
+
+    // Clean up common error prefixes
+    if (errorMessage.startsWith('Exception: ')) {
+      errorMessage = errorMessage.substring(11);
+    } else if (errorMessage.startsWith('FirebaseException: ')) {
+      errorMessage = errorMessage.substring(19);
+    }
+
+    // Handle specific error cases
+    if (errorMessage.contains('network')) {
+      return 'Lỗi kết nối mạng. Vui lòng kiểm tra internet.';
+    } else if (errorMessage.contains('permission')) {
+      return 'Không có quyền truy cập. Vui lòng đăng nhập lại.';
+    } else if (errorMessage.contains('already has a partner')) {
+      return 'Người dùng đã có đối tác rồi.';
+    } else if (errorMessage.contains('expired')) {
+      return 'Mã mời đã hết hạn.';
+    } else if (errorMessage.contains('not found') ||
+        errorMessage.contains('không tồn tại')) {
+      return 'Mã mời không tồn tại.';
+    }
+
+    return errorMessage;
   }
 
   void _showDisconnectDialog(UserProvider userProvider) {
@@ -1431,7 +1713,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       setState(() => _currentInviteCode = null);
       _loadCurrentInviteCode();
     } catch (e) {
-      _showErrorSnackBar('Lỗi khi ngắt kết nối: $e');
+      _showErrorSnackBar('Lỗi khi ngắt kết nối: ${_getErrorMessage(e)}');
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -1486,10 +1768,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                           'Số ngày kết nối',
                           '${stats['duration']?['days'] ?? 0}',
                         ),
-                        _buildInfoRow(
-                          'Giao dịch chung',
-                          '${stats['financial']?['transactionCount'] ?? 0}',
-                        ),
+                        _buildInfoRow('Trạng thái', 'Hoạt động'),
                       ],
                     );
                   }
@@ -1541,7 +1820,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       }
     } catch (e) {
       if (mounted) {
-        _showErrorSnackBar('Đồng bộ thất bại: $e');
+        _showErrorSnackBar('Đồng bộ thất bại: ${_getErrorMessage(e)}');
       }
     }
   }
@@ -1583,7 +1862,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       );
       _showSuccessSnackBar('Đã tạo danh mục mặc định!');
     } catch (e) {
-      _showErrorSnackBar('Lỗi khi tạo danh mục: $e');
+      _showErrorSnackBar('Lỗi khi tạo danh mục: ${_getErrorMessage(e)}');
     }
   }
 
@@ -1656,6 +1935,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   void _showFeatureNotImplemented(String feature) {
     _showErrorSnackBar('$feature chưa được triển khai');
   }
+
+  // ============ UI HELPERS ============
 
   void _showSuccessSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(

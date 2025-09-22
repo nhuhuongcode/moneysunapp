@@ -9,7 +9,7 @@ import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/providers/transaction_provider.dart';
 import 'package:moneysun/data/providers/category_provider.dart';
 import 'package:moneysun/data/providers/connection_status_provider.dart';
-import 'package:moneysun/data/services/budget_provider.dart';
+import 'package:moneysun/data/providers/budget_provider.dart';
 import 'package:moneysun/presentation/widgets/smart_amount_input.dart';
 import 'package:moneysun/presentation/widgets/category_ownership_selector.dart';
 
