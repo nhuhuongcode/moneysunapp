@@ -1062,43 +1062,6 @@ class DataService extends ChangeNotifier {
     }
   }
 
-  Future<void> _downloadCategoriesFromFirebase(int? lastSyncTimestamp) async {
-    try {
-      Query query = _firebaseRef
-          .child('categories')
-          .orderByChild('ownerId')
-          .equalTo(currentUserId);
-
-      final snapshot = await query.get();
-      if (!snapshot.exists) return;
-
-      final categoriesMap = snapshot.value as Map<dynamic, dynamic>;
-
-      await _localDatabase!.transaction((txn) async {
-        for (final entry in categoriesMap.entries) {
-          final firebaseId = entry.key as String;
-          final firebaseData = entry.value as Map<dynamic, dynamic>;
-
-          final localRecords = await txn.query(
-            'categories',
-            where: 'firebase_id = ? OR id = ?',
-            whereArgs: [firebaseId, firebaseData['id']],
-            limit: 1,
-          );
-
-          if (localRecords.isEmpty) {
-            await _insertCategoryFromFirebase(txn, firebaseId, firebaseData);
-          }
-        }
-      });
-
-      debugPrint('✅ Downloaded categories from Firebase');
-    } catch (e) {
-      debugPrint('❌ Error downloading categories: $e');
-    }
-  }
-
-  // ============ HELPER METHODS ============
   Future<void> _insertTransactionFromFirebase(
     Transaction txn,
     String firebaseId,
@@ -1382,7 +1345,6 @@ class DataService extends ChangeNotifier {
     }
   }
 
-  /// Add new budget with offline-first support
   Future<void> addBudget({
     required String month,
     required double totalAmount,
@@ -1439,7 +1401,7 @@ class DataService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Update budget with offline-first support
+  /// ✅ ENHANCED: Update budget with version control
   Future<void> updateBudget(Budget budget) async {
     if (!isInitialized || _localDatabase == null) {
       throw Exception('Service not initialized');
@@ -1486,7 +1448,7 @@ class DataService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Delete budget with offline-first support
+  /// ✅ ENHANCED: Delete budget (soft delete)
   Future<void> deleteBudget(String budgetId) async {
     if (!isInitialized || _localDatabase == null) {
       throw Exception('Service not initialized');
@@ -1736,98 +1698,110 @@ class DataService extends ChangeNotifier {
     }
   }
 
-  // ============ SYNC OPERATIONS ============
+  Future<Budget?> getBudgetById(String budgetId) async {
+    if (!isInitialized || _localDatabase == null) return null;
 
-  Future<void> _syncBudgetToFirebase(
-    String recordId,
-    String operation,
-    Map<String, dynamic> data,
-  ) async {
-    final budgetRef = _firebaseRef.child('budgets').child(recordId);
-
-    switch (operation) {
-      case 'INSERT':
-      case 'UPDATE':
-        await budgetRef.set({...data, 'updatedAt': ServerValue.timestamp});
-        break;
-      case 'DELETE':
-        await budgetRef.remove();
-        break;
-    }
-
-    // Mark as synced in local database
-    await _localDatabase!.update(
-      'budgets',
-      {'sync_status': 1, 'firebase_id': recordId},
-      where: 'id = ?',
-      whereArgs: [recordId],
-    );
-  }
-
-  Future<void> _downloadBudgetsFromFirebase(int? lastSyncTimestamp) async {
     try {
-      Query query = _firebaseRef
-          .child('budgets')
-          .orderByChild('ownerId')
-          .equalTo(currentUserId);
+      final result = await _localDatabase!.query(
+        'budgets',
+        where: 'id = ? AND is_deleted = 0',
+        whereArgs: [budgetId],
+        limit: 1,
+      );
 
-      final snapshot = await query.get();
-      if (!snapshot.exists) return;
-
-      final budgetsMap = snapshot.value as Map<dynamic, dynamic>;
-
-      await _localDatabase!.transaction((txn) async {
-        for (final entry in budgetsMap.entries) {
-          final firebaseId = entry.key as String;
-          final firebaseData = entry.value as Map<dynamic, dynamic>;
-
-          final localRecords = await txn.query(
-            'budgets',
-            where: 'firebase_id = ? OR id = ?',
-            whereArgs: [firebaseId, firebaseData['id']],
-            limit: 1,
-          );
-
-          if (localRecords.isEmpty) {
-            await _insertBudgetFromFirebase(txn, firebaseId, firebaseData);
-          }
-        }
-      });
-
-      debugPrint('✅ Downloaded budgets from Firebase');
+      if (result.isNotEmpty) {
+        return _budgetFromMap(result.first);
+      }
+      return null;
     } catch (e) {
-      debugPrint('❌ Error downloading budgets: $e');
+      debugPrint('❌ Error getting budget by ID: $e');
+      return null;
     }
   }
 
-  Future<void> _insertBudgetFromFirebase(
-    Transaction txn,
-    String firebaseId,
-    Map<dynamic, dynamic> firebaseData,
-  ) async {
-    await txn.insert('budgets', {
-      'id': firebaseData['id'] ?? firebaseId,
-      'firebase_id': firebaseId,
-      'owner_id': firebaseData['ownerId'] ?? '',
-      'month': firebaseData['month'] ?? '',
-      'total_amount': (firebaseData['totalAmount'] ?? 0).toDouble(),
-      'category_amounts': jsonEncode(firebaseData['categoryAmounts'] ?? {}),
-      'budget_type': firebaseData['budgetType'] ?? 'personal',
-      'period': firebaseData['period'] ?? 'monthly',
-      'start_date': firebaseData['startDate'],
-      'end_date': firebaseData['endDate'],
-      'created_by': firebaseData['createdBy'],
-      'is_active': firebaseData['isActive'] == true ? 1 : 0,
-      'is_deleted': firebaseData['isDeleted'] == true ? 1 : 0,
-      'notes': firebaseData['notes'] != null
-          ? jsonEncode(firebaseData['notes'])
-          : null,
-      'category_limits': firebaseData['categoryLimits'] != null
-          ? jsonEncode(firebaseData['categoryLimits'])
-          : null,
-      'sync_status': 1, // Synced
-      'version': firebaseData['version'] ?? 1,
-    });
+  /// ✅ NEW: Get budget for specific month and type
+  Future<Budget?> getBudgetForMonth(String month, BudgetType budgetType) async {
+    if (!isInitialized || _localDatabase == null || currentUserId == null) {
+      return null;
+    }
+
+    try {
+      String whereClause =
+          'month = ? AND budget_type = ? AND is_deleted = 0 AND (owner_id = ?';
+      List<dynamic> whereArgs = [month, budgetType.name, currentUserId];
+
+      // Include partnership budgets if user has partnership
+      if (partnershipId != null) {
+        whereClause += ' OR owner_id = ?';
+        whereArgs.add(partnershipId!);
+      }
+
+      whereClause += ')';
+
+      final result = await _localDatabase!.query(
+        'budgets',
+        where: whereClause,
+        whereArgs: whereArgs,
+        limit: 1,
+        orderBy: 'created_at DESC',
+      );
+
+      if (result.isNotEmpty) {
+        return _budgetFromMap(result.first);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('❌ Error getting budget for month: $e');
+      return null;
+    }
+  }
+
+  /// ✅ NEW: Get budgets by type and date range
+  Future<List<Budget>> getBudgetsByDateRange(
+    DateTime startDate,
+    DateTime endDate, {
+    BudgetType? budgetType,
+  }) async {
+    if (!isInitialized || _localDatabase == null || currentUserId == null) {
+      return [];
+    }
+
+    try {
+      String whereClause = 'is_deleted = 0 AND (owner_id = ?';
+      List<dynamic> whereArgs = [currentUserId];
+
+      // Include partnership budgets if user has partnership
+      if (partnershipId != null) {
+        whereClause += ' OR owner_id = ?';
+        whereArgs.add(partnershipId!);
+      }
+
+      whereClause += ')';
+
+      // Apply budget type filter
+      if (budgetType != null) {
+        whereClause += ' AND budget_type = ?';
+        whereArgs.add(budgetType.name);
+      }
+
+      // Apply date range filter (using month field as YYYY-MM format)
+      final startMonth = startDate.toIso8601String().substring(0, 7);
+      final endMonth = endDate.toIso8601String().substring(0, 7);
+      whereClause += ' AND month >= ? AND month <= ?';
+      whereArgs.addAll([startMonth, endMonth]);
+
+      final result = await _localDatabase!.query(
+        'budgets',
+        where: whereClause,
+        whereArgs: whereArgs,
+        orderBy: 'month DESC, created_at DESC',
+      );
+
+      return result.map((map) => _budgetFromMap(map)).toList();
+    } catch (e) {
+      debugPrint('❌ Error getting budgets by date range: $e');
+      return [];
+    }
   }
 
   Future<void> _refreshBudgetsIfNeeded() async {
@@ -1900,22 +1874,151 @@ class DataService extends ChangeNotifier {
           'usage_count': 'usage_count + 1',
           'last_used': DateTime.now().millisecondsSinceEpoch,
           'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          'sync_status': 0, // Mark for sync
         },
         where: 'id = ?',
         whereArgs: [categoryId],
       );
+
+      // Queue for sync
+      await _localDatabase!.insert('sync_queue', {
+        'table_name': 'categories',
+        'record_id': categoryId,
+        'operation': 'UPDATE',
+        'data': jsonEncode({'usageIncrement': true}),
+        'priority': 3, // Low priority
+      });
+
+      if (isOnline) {
+        unawaited(_syncSingleRecord('categories', categoryId));
+      }
     } catch (e) {
       debugPrint('❌ Error incrementing category usage: $e');
     }
   }
 
-  /// Helper method to get owner ID based on ownership type
-  String _getCurrentOwnerCategoryId(CategoryOwnershipType ownershipType) {
-    if (ownershipType == CategoryOwnershipType.shared &&
-        partnershipId != null) {
-      return partnershipId!;
+  Future<Category?> getCategoryById(String categoryId) async {
+    if (!isInitialized || _localDatabase == null) return null;
+
+    try {
+      final result = await _localDatabase!.query(
+        'categories',
+        where: 'id = ? AND is_archived = 0',
+        whereArgs: [categoryId],
+        limit: 1,
+      );
+
+      if (result.isNotEmpty) {
+        return _categoryFromMap(result.first);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('❌ Error getting category by ID: $e');
+      return null;
     }
-    return currentUserId ?? '';
+  }
+
+  Future<List<Category>> getCategoriesByType(
+    String type, {
+    CategoryOwnershipType? ownershipType,
+    bool includeArchived = false,
+  }) async {
+    if (!isInitialized || _localDatabase == null || currentUserId == null) {
+      return [];
+    }
+
+    try {
+      String whereClause = 'type = ? AND (owner_id = ?';
+      List<dynamic> whereArgs = [type, currentUserId];
+
+      // Include partnership categories if user has partnership
+      if (partnershipId != null) {
+        whereClause += ' OR owner_id = ?';
+        whereArgs.add(partnershipId!);
+      }
+
+      whereClause += ')';
+
+      // Apply ownership filter
+      if (ownershipType != null) {
+        whereClause += ' AND ownership_type = ?';
+        whereArgs.add(ownershipType.name);
+      }
+
+      // Apply archived filter
+      if (!includeArchived) {
+        whereClause += ' AND is_archived = 0';
+      }
+
+      final result = await _localDatabase!.query(
+        'categories',
+        where: whereClause,
+        whereArgs: whereArgs,
+        orderBy: 'usage_count DESC, name ASC',
+      );
+
+      return result.map((map) => _categoryFromMap(map)).toList();
+    } catch (e) {
+      debugPrint('❌ Error getting categories by type: $e');
+      return [];
+    }
+  }
+
+  Future<List<Category>> searchCategories(
+    String query, {
+    String? type,
+    CategoryOwnershipType? ownershipType,
+  }) async {
+    if (query.trim().isEmpty) return [];
+
+    final allCategories = await getCategories(includeArchived: false);
+    final results = <Category>[];
+    final scores = <Category, int>{};
+
+    final lowercaseQuery = query.toLowerCase().trim();
+
+    for (final category in allCategories) {
+      // Apply type filter
+      if (type != null && category.type != type) continue;
+
+      // Apply ownership filter
+      if (ownershipType != null && category.ownershipType != ownershipType)
+        continue;
+
+      int score = 0;
+
+      // Exact name match gets highest score
+      if (category.name.toLowerCase() == lowercaseQuery) {
+        score += 100;
+      }
+      // Name starts with query
+      else if (category.name.toLowerCase().startsWith(lowercaseQuery)) {
+        score += 50;
+      }
+      // Name contains query
+      else if (category.name.toLowerCase().contains(lowercaseQuery)) {
+        score += 25;
+      }
+
+      // Sub-category matches
+      for (final subCategory in category.subCategories.values) {
+        if (subCategory.toLowerCase().contains(lowercaseQuery)) {
+          score += 10;
+        }
+      }
+
+      // Usage count boost
+      score += (category.usageCount * 0.1).round();
+
+      if (score > 0) {
+        results.add(category);
+        scores[category] = score;
+      }
+    }
+
+    // Sort by relevance score
+    results.sort((a, b) => scores[b]!.compareTo(scores[a]!));
+    return results;
   }
 
   Future<void> addCategory({
@@ -1932,7 +2035,7 @@ class DataService extends ChangeNotifier {
 
     final categoryId =
         'cat_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(9999)}';
-    final finalOwnerId = ownerId ?? _getCurrentOwnerCateId(ownershipType);
+    final finalOwnerId = ownerId ?? _getCurrentOwnerCategoryId(ownershipType);
 
     await _localDatabase!.transaction((txn) async {
       await txn.insert('categories', {
@@ -2019,7 +2122,7 @@ class DataService extends ChangeNotifier {
     }
 
     await _localDatabase!.transaction((txn) async {
-      // Soft delete
+      // Soft delete by archiving
       await txn.update(
         'categories',
         {
@@ -2042,8 +2145,6 @@ class DataService extends ChangeNotifier {
 
     notifyListeners();
   }
-
-  // 🔥 PRIORITY 3: Add basic reporting methods (ADD new methods)
 
   /// Get dashboard summary data
   Future<Map<String, dynamic>> getDashboardSummary({
@@ -2305,97 +2406,6 @@ class DataService extends ChangeNotifier {
     }
   }
 
-  // 🔥 PRIORITY 4: Fix Firebase sync methods (REPLACE existing methods)
-
-  /// FIXED: Safe category insertion from Firebase
-  Future<void> _insertCategoryFromFirebase(
-    Transaction txn,
-    String firebaseId,
-    Map<dynamic, dynamic> firebaseData,
-  ) async {
-    try {
-      // ✅ FIX: Validate required fields
-      final name = (firebaseData['name'] as String?)?.trim();
-      final ownerId = (firebaseData['ownerId'] as String?)?.trim();
-      final type = (firebaseData['type'] as String?)?.trim();
-
-      // Skip invalid data
-      if (name == null || name.isEmpty) {
-        debugPrint('⚠️ Skipping category with empty name: $firebaseId');
-        return;
-      }
-
-      if (ownerId == null || ownerId.isEmpty) {
-        debugPrint('⚠️ Skipping category with empty ownerId: $firebaseId');
-        return;
-      }
-
-      if (type == null || !['income', 'expense'].contains(type)) {
-        debugPrint(
-          '⚠️ Skipping category with invalid type: $firebaseId ($type)',
-        );
-        return;
-      }
-
-      // Check if already exists to prevent duplicates
-      final existing = await txn.query(
-        'categories',
-        where: 'firebase_id = ? OR id = ?',
-        whereArgs: [firebaseId, firebaseData['id']],
-        limit: 1,
-      );
-
-      if (existing.isNotEmpty) {
-        // Update existing
-        await txn.update(
-          'categories',
-          {
-            'name': name,
-            'owner_id': ownerId,
-            'type': type,
-            'icon_code_point': firebaseData['iconCodePoint'],
-            'sub_categories': jsonEncode(firebaseData['subCategories'] ?? {}),
-            'ownership_type': firebaseData['ownershipType'] ?? 'personal',
-            'created_by': firebaseData['createdBy'],
-            'is_archived': (firebaseData['isArchived'] ?? false) ? 1 : 0,
-            'usage_count': firebaseData['usageCount'] ?? 0,
-            'last_used': firebaseData['lastUsed'],
-            'sync_status': 1, // Synced
-            'version': firebaseData['version'] ?? 1,
-            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-          },
-          where: 'firebase_id = ?',
-          whereArgs: [firebaseId],
-        );
-        debugPrint('✅ Updated existing category: $name');
-        return;
-      }
-
-      // Insert new category with validated data
-      await txn.insert('categories', {
-        'id': firebaseData['id'] ?? firebaseId,
-        'firebase_id': firebaseId,
-        'name': name, // ✅ VALIDATED: Non-empty
-        'owner_id': ownerId, // ✅ VALIDATED: Non-empty
-        'type': type, // ✅ VALIDATED: Valid type
-        'icon_code_point': firebaseData['iconCodePoint'],
-        'sub_categories': jsonEncode(firebaseData['subCategories'] ?? {}),
-        'ownership_type': firebaseData['ownershipType'] ?? 'personal',
-        'created_by': firebaseData['createdBy'],
-        'is_archived': (firebaseData['isArchived'] ?? false) ? 1 : 0,
-        'usage_count': firebaseData['usageCount'] ?? 0,
-        'last_used': firebaseData['lastUsed'],
-        'sync_status': 1, // Synced
-        'version': firebaseData['version'] ?? 1,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
-
-      debugPrint('✅ Inserted valid category from Firebase: $name');
-    } catch (e) {
-      debugPrint('❌ Error inserting category from Firebase ($firebaseId): $e');
-    }
-  }
-
-  /// FIXED: Safe wallet insertion from Firebase
   Future<void> _insertWalletFromFirebase(
     Transaction txn,
     String firebaseId,
@@ -2607,6 +2617,601 @@ class DataService extends ChangeNotifier {
     } catch (e) {
       debugPrint('❌ Error getting description suggestions: $e');
       return [];
+    }
+  }
+
+  Future<void> _syncBudgetToFirebase(
+    String recordId,
+    String operation,
+    Map<String, dynamic> data,
+  ) async {
+    final budgetRef = _firebaseRef.child('budgets').child(recordId);
+
+    switch (operation) {
+      case 'INSERT':
+      case 'UPDATE':
+        await budgetRef.set({...data, 'updatedAt': ServerValue.timestamp});
+        break;
+      case 'DELETE':
+        // For budgets, we do soft delete
+        await budgetRef.update({
+          'isDeleted': true,
+          'updatedAt': ServerValue.timestamp,
+        });
+        break;
+    }
+
+    await _localDatabase!.update(
+      'budgets',
+      {'sync_status': 1, 'firebase_id': recordId},
+      where: 'id = ?',
+      whereArgs: [recordId],
+    );
+  }
+
+  /// ✅ ENHANCED: Download categories from Firebase
+  Future<void> _downloadCategoriesFromFirebase(int? lastSyncTimestamp) async {
+    try {
+      Query query = _firebaseRef
+          .child('categories')
+          .orderByChild('ownerId')
+          .equalTo(currentUserId);
+
+      final snapshot = await query.get();
+      if (!snapshot.exists) return;
+
+      final categoriesMap = snapshot.value as Map<dynamic, dynamic>;
+
+      await _localDatabase!.transaction((txn) async {
+        for (final entry in categoriesMap.entries) {
+          final firebaseId = entry.key as String;
+          final firebaseData = entry.value as Map<dynamic, dynamic>;
+
+          final localRecords = await txn.query(
+            'categories',
+            where: 'firebase_id = ? OR id = ?',
+            whereArgs: [firebaseId, firebaseData['id']],
+            limit: 1,
+          );
+
+          if (localRecords.isEmpty) {
+            await _insertCategoryFromFirebase(txn, firebaseId, firebaseData);
+          } else {
+            // Update existing record if Firebase version is newer
+            final localRecord = localRecords.first;
+            final localVersion = localRecord['version'] as int? ?? 1;
+            final firebaseVersion = firebaseData['version'] as int? ?? 1;
+
+            if (firebaseVersion > localVersion) {
+              await _updateCategoryFromFirebase(txn, firebaseId, firebaseData);
+            }
+          }
+        }
+      });
+
+      debugPrint('✅ Downloaded categories from Firebase');
+    } catch (e) {
+      debugPrint('❌ Error downloading categories: $e');
+    }
+  }
+
+  /// ✅ ENHANCED: Download budgets from Firebase
+  Future<void> _downloadBudgetsFromFirebase(int? lastSyncTimestamp) async {
+    try {
+      Query query = _firebaseRef
+          .child('budgets')
+          .orderByChild('ownerId')
+          .equalTo(currentUserId);
+
+      final snapshot = await query.get();
+      if (!snapshot.exists) return;
+
+      final budgetsMap = snapshot.value as Map<dynamic, dynamic>;
+
+      await _localDatabase!.transaction((txn) async {
+        for (final entry in budgetsMap.entries) {
+          final firebaseId = entry.key as String;
+          final firebaseData = entry.value as Map<dynamic, dynamic>;
+
+          final localRecords = await txn.query(
+            'budgets',
+            where: 'firebase_id = ? OR id = ?',
+            whereArgs: [firebaseId, firebaseData['id']],
+            limit: 1,
+          );
+
+          if (localRecords.isEmpty) {
+            await _insertBudgetFromFirebase(txn, firebaseId, firebaseData);
+          } else {
+            // Update existing record if Firebase version is newer
+            final localRecord = localRecords.first;
+            final localVersion = localRecord['version'] as int? ?? 1;
+            final firebaseVersion = firebaseData['version'] as int? ?? 1;
+
+            if (firebaseVersion > localVersion) {
+              await _updateBudgetFromFirebase(txn, firebaseId, firebaseData);
+            }
+          }
+        }
+      });
+
+      debugPrint('✅ Downloaded budgets from Firebase');
+    } catch (e) {
+      debugPrint('❌ Error downloading budgets: $e');
+    }
+  }
+
+  /// ✅ ENHANCED: Insert category from Firebase with validation
+  Future<void> _insertCategoryFromFirebase(
+    Transaction txn,
+    String firebaseId,
+    Map<dynamic, dynamic> firebaseData,
+  ) async {
+    try {
+      // Validate required fields
+      final name = (firebaseData['name'] as String?)?.trim();
+      final ownerId = (firebaseData['ownerId'] as String?)?.trim();
+      final type = (firebaseData['type'] as String?)?.trim();
+
+      // Skip invalid data
+      if (name == null ||
+          name.isEmpty ||
+          ownerId == null ||
+          ownerId.isEmpty ||
+          type == null ||
+          !['income', 'expense'].contains(type)) {
+        debugPrint('⚠️ Skipping invalid category from Firebase: $firebaseId');
+        return;
+      }
+
+      // Check if already exists to prevent duplicates
+      final existing = await txn.query(
+        'categories',
+        where: 'firebase_id = ? OR id = ?',
+        whereArgs: [firebaseId, firebaseData['id']],
+        limit: 1,
+      );
+
+      if (existing.isNotEmpty) {
+        await _updateCategoryFromFirebase(txn, firebaseId, firebaseData);
+        return;
+      }
+
+      await txn.insert('categories', {
+        'id': firebaseData['id'] ?? firebaseId,
+        'firebase_id': firebaseId,
+        'name': name,
+        'owner_id': ownerId,
+        'type': type,
+        'icon_code_point': firebaseData['iconCodePoint'],
+        'sub_categories': jsonEncode(firebaseData['subCategories'] ?? {}),
+        'ownership_type': firebaseData['ownershipType'] ?? 'personal',
+        'created_by': firebaseData['createdBy'],
+        'is_archived': (firebaseData['isArchived'] ?? false) ? 1 : 0,
+        'usage_count': firebaseData['usageCount'] ?? 0,
+        'last_used': firebaseData['lastUsed'],
+        'sync_status': 1, // Synced
+        'version': firebaseData['version'] ?? 1,
+        'created_at':
+            firebaseData['createdAt'] ??
+            DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        'updated_at':
+            firebaseData['updatedAt'] ??
+            DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+      debugPrint('✅ Inserted category from Firebase: $name');
+    } catch (e) {
+      debugPrint('❌ Error inserting category from Firebase ($firebaseId): $e');
+    }
+  }
+
+  /// ✅ NEW: Update category from Firebase
+  Future<void> _updateCategoryFromFirebase(
+    Transaction txn,
+    String firebaseId,
+    Map<dynamic, dynamic> firebaseData,
+  ) async {
+    try {
+      await txn.update(
+        'categories',
+        {
+          'name': (firebaseData['name'] as String?)?.trim() ?? '',
+          'owner_id': (firebaseData['ownerId'] as String?)?.trim() ?? '',
+          'type': firebaseData['type'] ?? 'expense',
+          'icon_code_point': firebaseData['iconCodePoint'],
+          'sub_categories': jsonEncode(firebaseData['subCategories'] ?? {}),
+          'ownership_type': firebaseData['ownershipType'] ?? 'personal',
+          'is_archived': (firebaseData['isArchived'] ?? false) ? 1 : 0,
+          'usage_count': firebaseData['usageCount'] ?? 0,
+          'last_used': firebaseData['lastUsed'],
+          'sync_status': 1, // Synced
+          'version': firebaseData['version'] ?? 1,
+          'updated_at':
+              firebaseData['updatedAt'] ??
+              DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'firebase_id = ? OR id = ?',
+        whereArgs: [firebaseId, firebaseData['id']],
+      );
+
+      debugPrint('✅ Updated category from Firebase: ${firebaseData['name']}');
+    } catch (e) {
+      debugPrint('❌ Error updating category from Firebase ($firebaseId): $e');
+    }
+  }
+
+  /// ✅ NEW: Insert budget from Firebase with validation
+  Future<void> _insertBudgetFromFirebase(
+    Transaction txn,
+    String firebaseId,
+    Map<dynamic, dynamic> firebaseData,
+  ) async {
+    try {
+      // Validate required fields
+      final ownerId = (firebaseData['ownerId'] as String?)?.trim();
+      final month = (firebaseData['month'] as String?)?.trim();
+
+      // Skip invalid data
+      if (ownerId == null ||
+          ownerId.isEmpty ||
+          month == null ||
+          month.isEmpty) {
+        debugPrint('⚠️ Skipping invalid budget from Firebase: $firebaseId');
+        return;
+      }
+
+      await txn.insert('budgets', {
+        'id': firebaseData['id'] ?? firebaseId,
+        'firebase_id': firebaseId,
+        'owner_id': ownerId,
+        'month': month,
+        'total_amount': (firebaseData['totalAmount'] ?? 0).toDouble(),
+        'category_amounts': jsonEncode(firebaseData['categoryAmounts'] ?? {}),
+        'budget_type': firebaseData['budgetType'] ?? 'personal',
+        'period': firebaseData['period'] ?? 'monthly',
+        'start_date': firebaseData['startDate'],
+        'end_date': firebaseData['endDate'],
+        'created_by': firebaseData['createdBy'],
+        'is_active': firebaseData['isActive'] == true ? 1 : 0,
+        'is_deleted': firebaseData['isDeleted'] == true ? 1 : 0,
+        'notes': firebaseData['notes'] != null
+            ? jsonEncode(firebaseData['notes'])
+            : null,
+        'category_limits': firebaseData['categoryLimits'] != null
+            ? jsonEncode(firebaseData['categoryLimits'])
+            : null,
+        'sync_status': 1, // Synced
+        'version': firebaseData['version'] ?? 1,
+        'created_at':
+            firebaseData['createdAt'] ??
+            DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        'updated_at':
+            firebaseData['updatedAt'] ??
+            DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+      debugPrint('✅ Inserted budget from Firebase: $month');
+    } catch (e) {
+      debugPrint('❌ Error inserting budget from Firebase ($firebaseId): $e');
+    }
+  }
+
+  /// ✅ NEW: Update budget from Firebase
+  Future<void> _updateBudgetFromFirebase(
+    Transaction txn,
+    String firebaseId,
+    Map<dynamic, dynamic> firebaseData,
+  ) async {
+    try {
+      await txn.update(
+        'budgets',
+        {
+          'owner_id': (firebaseData['ownerId'] as String?)?.trim() ?? '',
+          'month': (firebaseData['month'] as String?)?.trim() ?? '',
+          'total_amount': (firebaseData['totalAmount'] ?? 0).toDouble(),
+          'category_amounts': jsonEncode(firebaseData['categoryAmounts'] ?? {}),
+          'budget_type': firebaseData['budgetType'] ?? 'personal',
+          'period': firebaseData['period'] ?? 'monthly',
+          'start_date': firebaseData['startDate'],
+          'end_date': firebaseData['endDate'],
+          'is_active': firebaseData['isActive'] == true ? 1 : 0,
+          'is_deleted': firebaseData['isDeleted'] == true ? 1 : 0,
+          'notes': firebaseData['notes'] != null
+              ? jsonEncode(firebaseData['notes'])
+              : null,
+          'category_limits': firebaseData['categoryLimits'] != null
+              ? jsonEncode(firebaseData['categoryLimits'])
+              : null,
+          'sync_status': 1, // Synced
+          'version': firebaseData['version'] ?? 1,
+          'updated_at':
+              firebaseData['updatedAt'] ??
+              DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'firebase_id = ? OR id = ?',
+        whereArgs: [firebaseId, firebaseData['id']],
+      );
+
+      debugPrint('✅ Updated budget from Firebase: ${firebaseData['month']}');
+    } catch (e) {
+      debugPrint('❌ Error updating budget from Firebase ($firebaseId): $e');
+    }
+  }
+
+  // ============ ENHANCED OFFLINE QUEUE MANAGEMENT ============
+
+  /// ✅ NEW: Priority sync for critical operations
+  Future<void> _syncCriticalOperations() async {
+    if (!isOnline) return;
+
+    try {
+      // Get high priority items first
+      final criticalItems = await _localDatabase!.query(
+        'sync_queue',
+        where: 'processed_at IS NULL AND priority >= 2',
+        orderBy: 'priority DESC, scheduled_at ASC',
+        limit: 10,
+      );
+
+      for (final item in criticalItems) {
+        try {
+          await _processSyncItemEnhanced(item);
+
+          await _localDatabase!.update(
+            'sync_queue',
+            {'processed_at': DateTime.now().millisecondsSinceEpoch ~/ 1000},
+            where: 'id = ?',
+            whereArgs: [item['id']],
+          );
+
+          debugPrint(
+            '✅ Synced critical item: ${item['table_name']}/${item['record_id']}',
+          );
+        } catch (e) {
+          await _handleSyncItemError(item, e);
+          debugPrint(
+            '❌ Failed to sync critical item: ${item['table_name']}/${item['record_id']} - $e',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Error in critical sync: $e');
+    }
+  }
+
+  /// ✅ ENHANCED: Process sync items with better error handling
+  Future<void> _processSyncItemEnhanced(Map<String, dynamic> item) async {
+    final tableName = item['table_name'] as String;
+    final recordId = item['record_id'] as String;
+    final operation = item['operation'] as String;
+    final data = jsonDecode(item['data'] as String) as Map<String, dynamic>;
+
+    switch (tableName) {
+      case 'transactions':
+        await _syncTransactionToFirebase(recordId, operation, data);
+        break;
+      case 'wallets':
+        await _syncWalletToFirebase(recordId, operation, data);
+        break;
+      case 'categories':
+        await _syncCategoryToFirebase(recordId, operation, data);
+        break;
+      case 'budgets':
+        await _syncBudgetToFirebase(recordId, operation, data);
+        break;
+      default:
+        throw Exception('Unknown table: $tableName');
+    }
+  }
+
+  /// ✅ NEW: Batch sync for better performance
+  Future<void> _batchSyncOperations() async {
+    if (!isOnline) return;
+
+    try {
+      // Group sync items by table and operation for batch processing
+      final pendingItems = await _localDatabase!.query(
+        'sync_queue',
+        where: 'processed_at IS NULL',
+        orderBy: 'table_name, operation, priority DESC',
+        limit: 50,
+      );
+
+      final batchGroups = <String, List<Map<String, dynamic>>>{};
+
+      for (final item in pendingItems) {
+        final key = '${item['table_name']}_${item['operation']}';
+        batchGroups[key] ??= [];
+        batchGroups[key]!.add(item);
+      }
+
+      // Process each batch
+      for (final entry in batchGroups.entries) {
+        try {
+          await _processBatchSync(entry.key, entry.value);
+
+          // Mark all items in batch as processed
+          final itemIds = entry.value.map((item) => item['id'] as int).toList();
+          await _markBatchAsProcessed(itemIds);
+
+          debugPrint(
+            '✅ Processed batch: ${entry.key} (${entry.value.length} items)',
+          );
+        } catch (e) {
+          debugPrint('❌ Batch sync failed: ${entry.key} - $e');
+
+          // Handle individual items in failed batch
+          for (final item in entry.value) {
+            await _handleSyncItemError(item, e);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Error in batch sync: $e');
+    }
+  }
+
+  /// ✅ NEW: Process batch sync operations
+  Future<void> _processBatchSync(
+    String batchKey,
+    List<Map<String, dynamic>> items,
+  ) async {
+    final parts = batchKey.split('_');
+    final tableName = parts[0];
+    final operation = parts[1];
+
+    switch (tableName) {
+      case 'categories':
+        await _batchSyncCategories(items, operation);
+        break;
+      case 'budgets':
+        await _batchSyncBudgets(items, operation);
+        break;
+      case 'transactions':
+        // Process individually for transactions due to complexity
+        for (final item in items) {
+          await _processSyncItemEnhanced(item);
+        }
+        break;
+      case 'wallets':
+        // Process individually for wallets due to balance calculations
+        for (final item in items) {
+          await _processSyncItemEnhanced(item);
+        }
+        break;
+      default:
+        throw Exception('Unknown table for batch sync: $tableName');
+    }
+  }
+
+  /// ✅ NEW: Batch sync categories
+  Future<void> _batchSyncCategories(
+    List<Map<String, dynamic>> items,
+    String operation,
+  ) async {
+    final batchData = <String, Map<String, dynamic>>{};
+
+    for (final item in items) {
+      final recordId = item['record_id'] as String;
+      final data = jsonDecode(item['data'] as String) as Map<String, dynamic>;
+      batchData[recordId] = {...data, 'updatedAt': ServerValue.timestamp};
+    }
+
+    // Use Firebase batch operations
+    final batchRef = _firebaseRef.child('categories');
+    await batchRef.update(batchData);
+
+    // Update local sync status
+    for (final item in items) {
+      await _localDatabase!.update(
+        'categories',
+        {'sync_status': 1, 'firebase_id': item['record_id']},
+        where: 'id = ?',
+        whereArgs: [item['record_id']],
+      );
+    }
+  }
+
+  /// ✅ NEW: Batch sync budgets
+  Future<void> _batchSyncBudgets(
+    List<Map<String, dynamic>> items,
+    String operation,
+  ) async {
+    final batchData = <String, Map<String, dynamic>>{};
+
+    for (final item in items) {
+      final recordId = item['record_id'] as String;
+      final data = jsonDecode(item['data'] as String) as Map<String, dynamic>;
+      batchData[recordId] = {...data, 'updatedAt': ServerValue.timestamp};
+    }
+
+    // Use Firebase batch operations
+    final batchRef = _firebaseRef.child('budgets');
+    await batchRef.update(batchData);
+
+    // Update local sync status
+    for (final item in items) {
+      await _localDatabase!.update(
+        'budgets',
+        {'sync_status': 1, 'firebase_id': item['record_id']},
+        where: 'id = ?',
+        whereArgs: [item['record_id']],
+      );
+    }
+  }
+
+  /// ✅ NEW: Mark batch items as processed
+  Future<void> _markBatchAsProcessed(List<int> itemIds) async {
+    if (itemIds.isEmpty) return;
+
+    final placeholders = itemIds.map((_) => '?').join(',');
+    await _localDatabase!.update(
+      'sync_queue',
+      {'processed_at': DateTime.now().millisecondsSinceEpoch ~/ 1000},
+      where: 'id IN ($placeholders)',
+      whereArgs: itemIds,
+    );
+  }
+
+  // ============ HELPER METHODS ============
+
+  /// ✅ NEW: Helper to get current owner ID for categories
+  String _getCurrentOwnerCategoryId(CategoryOwnershipType ownershipType) {
+    if (ownershipType == CategoryOwnershipType.shared &&
+        partnershipId != null) {
+      return partnershipId!;
+    }
+    return currentUserId ?? '';
+  }
+
+  /// ✅ NEW: Validate category-budget relationships
+  Future<void> _validateCategoryBudgetRelationships() async {
+    try {
+      final budgets = await getBudgets();
+
+      for (final budget in budgets) {
+        bool needsUpdate = false;
+        final validCategoryAmounts = <String, double>{};
+
+        for (final entry in budget.categoryAmounts.entries) {
+          final categoryId = entry.key;
+          final amount = entry.value;
+
+          // Check if category still exists and is valid
+          final category = await getCategoryById(categoryId);
+          if (category != null &&
+              !category.isArchived &&
+              category.type == 'expense') {
+            validCategoryAmounts[categoryId] = amount;
+          } else {
+            needsUpdate = true;
+            debugPrint('⚠️ Removing invalid category from budget: $categoryId');
+          }
+        }
+
+        if (needsUpdate && validCategoryAmounts.isNotEmpty) {
+          final newTotal = validCategoryAmounts.values.fold(
+            0.0,
+            (sum, val) => sum + val,
+          );
+          final updatedBudget = budget.copyWith(
+            categoryAmounts: validCategoryAmounts,
+            totalAmount: newTotal,
+            version: budget.version + 1,
+            updatedAt: DateTime.now(),
+          );
+
+          await updateBudget(updatedBudget);
+        } else if (needsUpdate && validCategoryAmounts.isEmpty) {
+          // Delete budget if no valid categories remain
+          await deleteBudget(budget.id);
+        }
+      }
+
+      debugPrint('✅ Category-budget relationships validated');
+    } catch (e) {
+      debugPrint('❌ Error validating category-budget relationships: $e');
     }
   }
 
