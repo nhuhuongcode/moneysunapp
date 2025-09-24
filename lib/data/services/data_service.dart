@@ -4071,6 +4071,700 @@ class DataService extends ChangeNotifier {
     }
   }
 
+  // Addition to lib/data/services/data_service.dart - Data Deletion Methods
+
+  // ============ DATA DELETION METHODS ============
+
+  /// ✅ NEW: Delete all user data (both local and Firebase)
+  Future<bool> deleteAllUserData({
+    required String userId,
+    String? partnershipId,
+    Function(String message, double progress)? onProgress,
+  }) async {
+    if (!_isInitialized || _localDatabase == null) {
+      throw Exception('DataService not initialized');
+    }
+
+    try {
+      debugPrint('🗑️ Starting complete data deletion for user: $userId');
+      onProgress?.call('Bắt đầu xóa dữ liệu...', 0.0);
+
+      // Step 1: Delete from Firebase if online
+      if (_isOnline) {
+        await _deleteFirebaseUserData(userId, partnershipId, onProgress);
+      } else {
+        onProgress?.call('Chế độ offline - chỉ xóa local...', 0.3);
+      }
+
+      // Step 2: Delete all local data
+      await _deleteAllLocalData(userId, partnershipId, onProgress);
+
+      // Step 3: Clear sync queue
+      await _clearSyncQueue();
+      onProgress?.call('Dọn dẹp hoàn tất!', 1.0);
+
+      debugPrint('✅ All user data deleted successfully');
+      return true;
+    } catch (e) {
+      debugPrint('❌ Error deleting all user data: $e');
+      rethrow;
+    }
+  }
+
+  /// ✅ NEW: Delete user data from Firebase
+  Future<void> _deleteFirebaseUserData(
+    String userId,
+    String? partnershipId,
+    Function(String message, double progress)? onProgress,
+  ) async {
+    try {
+      onProgress?.call('Xóa dữ liệu online...', 0.1);
+
+      final Map<String, dynamic> updates = {};
+
+      // Delete transactions
+      onProgress?.call('Xóa giao dịch online...', 0.2);
+      final transactionsSnapshot = await _firebaseRef
+          .child('transactions')
+          .orderByChild('userId')
+          .equalTo(userId)
+          .get();
+
+      if (transactionsSnapshot.exists) {
+        final transactions =
+            transactionsSnapshot.value as Map<dynamic, dynamic>;
+        for (final transactionId in transactions.keys) {
+          updates['transactions/$transactionId'] = null;
+        }
+        debugPrint(
+          '🗑️ Queued ${transactions.length} transactions for deletion',
+        );
+      }
+
+      // Delete wallets (personal)
+      onProgress?.call('Xóa ví cá nhân online...', 0.3);
+      final walletsSnapshot = await _firebaseRef
+          .child('wallets')
+          .orderByChild('ownerId')
+          .equalTo(userId)
+          .get();
+
+      if (walletsSnapshot.exists) {
+        final wallets = walletsSnapshot.value as Map<dynamic, dynamic>;
+        for (final walletId in wallets.keys) {
+          updates['wallets/$walletId'] = null;
+        }
+        debugPrint(
+          '🗑️ Queued ${wallets.length} personal wallets for deletion',
+        );
+      }
+
+      // Delete categories (personal)
+      onProgress?.call('Xóa danh mục cá nhân online...', 0.4);
+      final categoriesSnapshot = await _firebaseRef
+          .child('categories')
+          .orderByChild('ownerId')
+          .equalTo(userId)
+          .get();
+
+      if (categoriesSnapshot.exists) {
+        final categories = categoriesSnapshot.value as Map<dynamic, dynamic>;
+        for (final categoryId in categories.keys) {
+          updates['categories/$categoryId'] = null;
+        }
+        debugPrint(
+          '🗑️ Queued ${categories.length} personal categories for deletion',
+        );
+      }
+
+      // Delete budgets (personal)
+      onProgress?.call('Xóa ngân sách cá nhân online...', 0.5);
+      final budgetsSnapshot = await _firebaseRef
+          .child('budgets')
+          .orderByChild('ownerId')
+          .equalTo(userId)
+          .get();
+
+      if (budgetsSnapshot.exists) {
+        final budgets = budgetsSnapshot.value as Map<dynamic, dynamic>;
+        for (final budgetId in budgets.keys) {
+          updates['budgets/$budgetId'] = null;
+        }
+        debugPrint(
+          '🗑️ Queued ${budgets.length} personal budgets for deletion',
+        );
+      }
+
+      // Delete shared data if partnership exists
+      if (partnershipId != null) {
+        await _deleteSharedFirebaseData(partnershipId, updates, onProgress);
+      }
+
+      // Delete user profile and related data
+      onProgress?.call('Xóa thông tin tài khoản online...', 0.7);
+      updates['users/$userId'] = null;
+      updates['user_notifications/$userId'] = null;
+      updates['user_refresh_triggers/$userId'] = null;
+
+      // Execute all deletions in one batch
+      if (updates.isNotEmpty) {
+        onProgress?.call('Thực hiện xóa online...', 0.75);
+        await _firebaseRef.update(updates);
+        debugPrint('✅ Deleted ${updates.length} items from Firebase');
+      }
+    } catch (e) {
+      debugPrint('❌ Error deleting Firebase data: $e');
+      throw Exception('Failed to delete online data: $e');
+    }
+  }
+
+  /// ✅ NEW: Delete shared data from Firebase
+  Future<void> _deleteSharedFirebaseData(
+    String partnershipId,
+    Map<String, dynamic> updates,
+    Function(String message, double progress)? onProgress,
+  ) async {
+    try {
+      onProgress?.call('Xóa dữ liệu chung online...', 0.55);
+
+      // Delete shared wallets
+      final sharedWalletsSnapshot = await _firebaseRef
+          .child('wallets')
+          .orderByChild('ownerId')
+          .equalTo(partnershipId)
+          .get();
+
+      if (sharedWalletsSnapshot.exists) {
+        final sharedWallets =
+            sharedWalletsSnapshot.value as Map<dynamic, dynamic>;
+        for (final walletId in sharedWallets.keys) {
+          updates['wallets/$walletId'] = null;
+        }
+        debugPrint(
+          '🗑️ Queued ${sharedWallets.length} shared wallets for deletion',
+        );
+      }
+
+      // Delete shared categories
+      final sharedCategoriesSnapshot = await _firebaseRef
+          .child('categories')
+          .orderByChild('ownerId')
+          .equalTo(partnershipId)
+          .get();
+
+      if (sharedCategoriesSnapshot.exists) {
+        final sharedCategories =
+            sharedCategoriesSnapshot.value as Map<dynamic, dynamic>;
+        for (final categoryId in sharedCategories.keys) {
+          updates['categories/$categoryId'] = null;
+        }
+        debugPrint(
+          '🗑️ Queued ${sharedCategories.length} shared categories for deletion',
+        );
+      }
+
+      // Delete shared budgets
+      final sharedBudgetsSnapshot = await _firebaseRef
+          .child('budgets')
+          .orderByChild('ownerId')
+          .equalTo(partnershipId)
+          .get();
+
+      if (sharedBudgetsSnapshot.exists) {
+        final sharedBudgets =
+            sharedBudgetsSnapshot.value as Map<dynamic, dynamic>;
+        for (final budgetId in sharedBudgets.keys) {
+          updates['budgets/$budgetId'] = null;
+        }
+        debugPrint(
+          '🗑️ Queued ${sharedBudgets.length} shared budgets for deletion',
+        );
+      }
+
+      // Delete partnership record
+      updates['partnerships/$partnershipId'] = null;
+    } catch (e) {
+      debugPrint('❌ Error preparing shared data deletion: $e');
+    }
+  }
+
+  /// ✅ NEW: Delete all local data from SQLite
+  Future<void> _deleteAllLocalData(
+    String userId,
+    String? partnershipId,
+    Function(String message, double progress)? onProgress,
+  ) async {
+    try {
+      onProgress?.call('Xóa dữ liệu local...', 0.8);
+
+      await _localDatabase!.transaction((txn) async {
+        // Delete transactions
+        onProgress?.call('Xóa giao dịch local...', 0.81);
+        int deletedTransactions = await txn.delete(
+          'transactions',
+          where: 'user_id = ?',
+          whereArgs: [userId],
+        );
+        debugPrint('🗑️ Deleted $deletedTransactions local transactions');
+
+        // Delete wallets (personal and shared)
+        onProgress?.call('Xóa ví local...', 0.83);
+        String walletWhereClause = 'owner_id = ?';
+        List<dynamic> walletWhereArgs = [userId];
+
+        if (partnershipId != null) {
+          walletWhereClause = 'owner_id = ? OR owner_id = ?';
+          walletWhereArgs = [userId, partnershipId];
+        }
+
+        int deletedWallets = await txn.delete(
+          'wallets',
+          where: walletWhereClause,
+          whereArgs: walletWhereArgs,
+        );
+        debugPrint('🗑️ Deleted $deletedWallets local wallets');
+
+        // Delete categories (personal and shared)
+        onProgress?.call('Xóa danh mục local...', 0.85);
+        int deletedCategories = await txn.delete(
+          'categories',
+          where: walletWhereClause, // Same logic as wallets
+          whereArgs: walletWhereArgs,
+        );
+        debugPrint('🗑️ Deleted $deletedCategories local categories');
+
+        // Delete budgets (personal and shared)
+        onProgress?.call('Xóa ngân sách local...', 0.87);
+        int deletedBudgets = await txn.delete(
+          'budgets',
+          where: walletWhereClause, // Same logic as wallets
+          whereArgs: walletWhereArgs,
+        );
+        debugPrint('🗑️ Deleted $deletedBudgets local budgets');
+
+        // Clear system metadata
+        onProgress?.call('Dọn dẹp metadata...', 0.89);
+        await txn.delete('system_metadata');
+        debugPrint('🗑️ Cleared system metadata');
+      });
+
+      debugPrint('✅ All local data deleted successfully');
+    } catch (e) {
+      debugPrint('❌ Error deleting local data: $e');
+      throw Exception('Failed to delete local data: $e');
+    }
+  }
+
+  /// ✅ NEW: Clear sync queue
+  Future<void> _clearSyncQueue() async {
+    try {
+      if (_localDatabase != null) {
+        int deletedItems = await _localDatabase!.delete('sync_queue');
+        debugPrint('🗑️ Cleared $deletedItems items from sync queue');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error clearing sync queue: $e');
+    }
+  }
+
+  /// ✅ NEW: Reset DataService state
+  Future<void> resetDataServiceState() async {
+    try {
+      debugPrint('🔄 Resetting DataService state...');
+
+      // Clear cached data
+      _clearAnalyticsCache();
+
+      // Reset counters
+      _pendingItems = 0;
+      _lastSyncTime = null;
+      _lastError = null;
+
+      // Cancel active operations
+      for (final completer in _activeSyncs.values) {
+        if (!completer.isCompleted) {
+          completer.complete();
+        }
+      }
+      _activeSyncs.clear();
+
+      // Reset sync timer
+      _syncTimer?.cancel();
+      if (_isOnline) {
+        _startBackgroundServices();
+      }
+
+      // Notify listeners
+      notifyListeners();
+
+      debugPrint('✅ DataService state reset complete');
+    } catch (e) {
+      debugPrint('❌ Error resetting DataService state: $e');
+    }
+  }
+
+  /// ✅ NEW: Clear analytics cache (if exists)
+  void _clearAnalyticsCache() {
+    try {
+      // Clear any cached analytics data
+      // Note: This method assumes there might be analytics caching in the future
+      // For now, it's a placeholder that can be extended
+      debugPrint('🧹 Analytics cache cleared (placeholder)');
+    } catch (e) {
+      debugPrint('⚠️ Error clearing analytics cache: $e');
+    }
+  }
+
+  /// ✅ NEW: Clear all caches and temporary data
+  void clearAllCaches() {
+    try {
+      debugPrint('🧹 Clearing all caches...');
+
+      // Clear analytics cache
+      _clearAnalyticsCache();
+
+      // Clear any other caches that might exist
+      // This is extensible for future cache implementations
+
+      debugPrint('✅ All caches cleared');
+    } catch (e) {
+      debugPrint('❌ Error clearing caches: $e');
+    }
+  }
+
+  /// ✅ NEW: Get data deletion statistics (for debugging)
+  Future<Map<String, dynamic>> getDataDeletionStats() async {
+    if (!_isInitialized || _localDatabase == null) {
+      return {};
+    }
+
+    try {
+      final stats = <String, dynamic>{};
+
+      // Count remaining local data
+      final transactionsCount =
+          Sqflite.firstIntValue(
+            await _localDatabase!.rawQuery('SELECT COUNT(*) FROM transactions'),
+          ) ??
+          0;
+
+      final walletsCount =
+          Sqflite.firstIntValue(
+            await _localDatabase!.rawQuery('SELECT COUNT(*) FROM wallets'),
+          ) ??
+          0;
+
+      final categoriesCount =
+          Sqflite.firstIntValue(
+            await _localDatabase!.rawQuery('SELECT COUNT(*) FROM categories'),
+          ) ??
+          0;
+
+      final budgetsCount =
+          Sqflite.firstIntValue(
+            await _localDatabase!.rawQuery('SELECT COUNT(*) FROM budgets'),
+          ) ??
+          0;
+
+      final syncQueueCount =
+          Sqflite.firstIntValue(
+            await _localDatabase!.rawQuery('SELECT COUNT(*) FROM sync_queue'),
+          ) ??
+          0;
+
+      stats['local_data'] = {
+        'transactions': transactionsCount,
+        'wallets': walletsCount,
+        'categories': categoriesCount,
+        'budgets': budgetsCount,
+        'sync_queue': syncQueueCount,
+        'total':
+            transactionsCount + walletsCount + categoriesCount + budgetsCount,
+      };
+
+      stats['service_state'] = {
+        'is_initialized': _isInitialized,
+        'is_online': _isOnline,
+        'is_syncing': _isSyncing,
+        'pending_items': _pendingItems,
+        'last_sync_time': _lastSyncTime?.toIso8601String(),
+        'last_error': _lastError,
+      };
+
+      return stats;
+    } catch (e) {
+      debugPrint('❌ Error getting deletion stats: $e');
+      return {'error': e.toString()};
+    }
+  }
+
+  /// ✅ NEW: Force clear all local database tables (nuclear option)
+  Future<void> forceNukeLocalDatabase() async {
+    if (!_isInitialized || _localDatabase == null) {
+      throw Exception('Database not available');
+    }
+
+    try {
+      debugPrint('💥 NUCLEAR OPTION: Force clearing all local data...');
+
+      await _localDatabase!.transaction((txn) async {
+        // Get all table names
+        final tables = await txn.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        );
+
+        // Delete all data from each table
+        for (final table in tables) {
+          final tableName = table['name'] as String;
+          try {
+            int deletedRows = await txn.delete(tableName);
+            debugPrint('💥 Nuked $deletedRows rows from $tableName');
+          } catch (e) {
+            debugPrint('⚠️ Could not nuke table $tableName: $e');
+          }
+        }
+      });
+
+      // Reset all counters
+      _pendingItems = 0;
+      _lastSyncTime = null;
+      _lastError = null;
+
+      notifyListeners();
+      debugPrint('✅ Nuclear database clearing completed');
+    } catch (e) {
+      debugPrint('❌ Nuclear option failed: $e');
+      rethrow;
+    }
+  }
+
+  /// ✅ NEW: Verify data deletion completion
+  Future<bool> verifyDeletionComplete(
+    String userId,
+    String? partnershipId,
+  ) async {
+    try {
+      final stats = await getDataDeletionStats();
+      final localData = stats['local_data'] as Map<String, dynamic>? ?? {};
+      final totalLocalItems = localData['total'] as int? ?? 0;
+
+      if (totalLocalItems > 0) {
+        debugPrint('⚠️ Deletion incomplete: $totalLocalItems items remaining');
+        debugPrint('Remaining items: $localData');
+        return false;
+      }
+
+      debugPrint('✅ Deletion verification: All local data cleared');
+      return true;
+    } catch (e) {
+      debugPrint('❌ Error verifying deletion: $e');
+      return false;
+    }
+  }
+
+  /// ✅ NEW: Emergency data recovery check (in case user wants to undo)
+  Future<Map<String, dynamic>> getRecoveryInfo() async {
+    if (!_isInitialized || _localDatabase == null) {
+      return {};
+    }
+
+    try {
+      // Check if there's any data that could potentially be recovered
+      final recoveryInfo = <String, dynamic>{};
+
+      // Check sync queue for any pending uploads (data that might be lost)
+      final pendingSyncItems = await _localDatabase!.query(
+        'sync_queue',
+        where: 'processed_at IS NULL',
+      );
+
+      recoveryInfo['pending_sync_items'] = pendingSyncItems.length;
+      recoveryInfo['has_recoverable_data'] = pendingSyncItems.isNotEmpty;
+      recoveryInfo['last_sync_time'] = _lastSyncTime?.toIso8601String();
+      recoveryInfo['is_online'] = _isOnline;
+
+      if (pendingSyncItems.isNotEmpty) {
+        final syncTypes = <String, int>{};
+        for (final item in pendingSyncItems) {
+          final tableName = item['table_name'] as String;
+          syncTypes[tableName] = (syncTypes[tableName] ?? 0) + 1;
+        }
+        recoveryInfo['pending_by_type'] = syncTypes;
+      }
+
+      return recoveryInfo;
+    } catch (e) {
+      debugPrint('❌ Error getting recovery info: $e');
+      return {'error': e.toString()};
+    }
+  }
+
+  /// ✅ NEW: Create a backup of critical data before deletion
+  Future<Map<String, dynamic>> createDataBackup(
+    String userId,
+    String? partnershipId,
+  ) async {
+    if (!_isInitialized || _localDatabase == null) {
+      throw Exception('DataService not initialized');
+    }
+
+    try {
+      debugPrint('💾 Creating data backup before deletion...');
+      final backup = <String, dynamic>{};
+
+      // Backup transactions
+      final transactions = await _localDatabase!.query(
+        'transactions',
+        where: 'user_id = ?',
+        whereArgs: [userId],
+      );
+      backup['transactions'] = transactions;
+
+      // Backup wallets
+      String walletWhereClause = 'owner_id = ?';
+      List<dynamic> walletWhereArgs = [userId];
+
+      if (partnershipId != null) {
+        walletWhereClause = 'owner_id = ? OR owner_id = ?';
+        walletWhereArgs = [userId, partnershipId];
+      }
+
+      final wallets = await _localDatabase!.query(
+        'wallets',
+        where: walletWhereClause,
+        whereArgs: walletWhereArgs,
+      );
+      backup['wallets'] = wallets;
+
+      // Backup categories
+      final categories = await _localDatabase!.query(
+        'categories',
+        where: walletWhereClause, // Same logic as wallets
+        whereArgs: walletWhereArgs,
+      );
+      backup['categories'] = categories;
+
+      // Backup budgets
+      final budgets = await _localDatabase!.query(
+        'budgets',
+        where: walletWhereClause, // Same logic as wallets
+        whereArgs: walletWhereArgs,
+      );
+      backup['budgets'] = budgets;
+
+      // Add metadata
+      backup['backup_info'] = {
+        'created_at': DateTime.now().toIso8601String(),
+        'user_id': userId,
+        'partnership_id': partnershipId,
+        'version': '1.0',
+        'total_items':
+            transactions.length +
+            wallets.length +
+            categories.length +
+            budgets.length,
+      };
+
+      debugPrint(
+        '💾 Backup created: ${backup['backup_info']['total_items']} items',
+      );
+      return backup;
+    } catch (e) {
+      debugPrint('❌ Error creating backup: $e');
+      rethrow;
+    }
+  }
+
+  /// ✅ NEW: Restore data from backup (if needed)
+  Future<bool> restoreFromBackup(Map<String, dynamic> backup) async {
+    if (!_isInitialized || _localDatabase == null) {
+      throw Exception('DataService not initialized');
+    }
+
+    try {
+      debugPrint('🔄 Restoring data from backup...');
+
+      await _localDatabase!.transaction((txn) async {
+        // Restore transactions
+        final transactions = backup['transactions'] as List<dynamic>? ?? [];
+        for (final transaction in transactions) {
+          await txn.insert(
+            'transactions',
+            Map<String, dynamic>.from(transaction),
+          );
+        }
+
+        // Restore wallets
+        final wallets = backup['wallets'] as List<dynamic>? ?? [];
+        for (final wallet in wallets) {
+          await txn.insert('wallets', Map<String, dynamic>.from(wallet));
+        }
+
+        // Restore categories
+        final categories = backup['categories'] as List<dynamic>? ?? [];
+        for (final category in categories) {
+          await txn.insert('categories', Map<String, dynamic>.from(category));
+        }
+
+        // Restore budgets
+        final budgets = backup['budgets'] as List<dynamic>? ?? [];
+        for (final budget in budgets) {
+          await txn.insert('budgets', Map<String, dynamic>.from(budget));
+        }
+      });
+
+      final backupInfo = backup['backup_info'] as Map<String, dynamic>? ?? {};
+      final totalItems = backupInfo['total_items'] as int? ?? 0;
+
+      debugPrint('✅ Restored $totalItems items from backup');
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('❌ Error restoring from backup: $e');
+      return false;
+    }
+  }
+
+  /// ✅ NEW: Get detailed deletion progress info
+  Map<String, dynamic> getDeletionProgressInfo() {
+    return {
+      'is_online': _isOnline,
+      'is_syncing': _isSyncing,
+      'pending_items': _pendingItems,
+      'last_sync_time': _lastSyncTime?.toIso8601String(),
+      'last_error': _lastError,
+      'active_syncs': _activeSyncs.length,
+      'service_initialized': _isInitialized,
+    };
+  }
+
+  /// ✅ NEW: Prepare for shutdown (cleanup before app closes)
+  Future<void> prepareForShutdown() async {
+    try {
+      debugPrint('🔌 Preparing DataService for shutdown...');
+
+      // Cancel all active operations
+      _syncTimer?.cancel();
+      _connectivitySubscription?.cancel();
+
+      for (final completer in _activeSyncs.values) {
+        if (!completer.isCompleted) {
+          completer.complete();
+        }
+      }
+      _activeSyncs.clear();
+
+      // Close database connection
+      await _localDatabase?.close();
+      _localDatabase = null;
+
+      _isInitialized = false;
+      debugPrint('✅ DataService shutdown complete');
+    } catch (e) {
+      debugPrint('❌ Error during shutdown: $e');
+    }
+  }
+
   @override
   void dispose() {
     _connectivitySubscription?.cancel();
