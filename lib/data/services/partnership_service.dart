@@ -89,7 +89,6 @@ class PartnershipService {
     }
   }
 
-  /// Accept partnership invitation
   Future<void> acceptInvitation(
     String inviteCode,
     UserProvider userProvider,
@@ -159,12 +158,6 @@ class PartnershipService {
         isActive: true,
       );
 
-      // Convert memberIds list to object format for Firebase
-      final memberIdsObject = <String, dynamic>{};
-      for (int i = 0; i < partnership.memberIds.length; i++) {
-        memberIdsObject[partnership.memberIds[i]] = true;
-      }
-
       // Double-check users don't have partners before proceeding
       final inviterCheck = await _dbRef.child('users/$inviterUid').get();
       final currentUserCheck = await _dbRef
@@ -184,74 +177,176 @@ class PartnershipService {
         throw Exception('Bạn đã có đối tác');
       }
 
-      // Use batch updates for atomic operations
-      final timestamp = ServerValue.timestamp;
-      final partnershipTimestamp =
-          partnershipCreationTime.millisecondsSinceEpoch;
+      // ✅ FIX: Execute partnership creation with immediate notifications
+      await _executePartnershipCreation(
+        partnership,
+        inviterUid,
+        userProvider,
+        inviteCode,
+        inviterData,
+      );
 
-      final updates = <String, dynamic>{
-        // Create partnership record with proper memberIds format
-        'partnerships/$partnershipId/id': partnershipId,
-        'partnerships/$partnershipId/memberIds': memberIdsObject,
-        'partnerships/$partnershipId/createdAt': partnershipTimestamp,
-        'partnerships/$partnershipId/memberNames': partnership.memberNames,
-        'partnerships/$partnershipId/isActive': true,
-
-        // Update inviter
-        'users/$inviterUid/partnershipId': partnershipId,
-        'users/$inviterUid/partnerUid': userProvider.currentUser!.uid,
-        'users/$inviterUid/partnerDisplayName':
-            userProvider.currentUser!.displayName ?? 'Người dùng',
-        'users/$inviterUid/partnershipCreatedAt': partnershipTimestamp,
-        'users/$inviterUid/currentInviteCode': null,
-        'users/$inviterUid/inviteCodeExpiry': null,
-        'users/$inviterUid/updatedAt': timestamp,
-
-        // Update current user
-        'users/${userProvider.currentUser!.uid}/partnershipId': partnershipId,
-        'users/${userProvider.currentUser!.uid}/partnerUid': inviterUid,
-        'users/${userProvider.currentUser!.uid}/partnerDisplayName':
-            inviterData['displayName']?.toString() ?? 'Người dùng',
-        'users/${userProvider.currentUser!.uid}/partnershipCreatedAt':
-            partnershipTimestamp,
-        'users/${userProvider.currentUser!.uid}/updatedAt': timestamp,
-
-        // Remove invite code
-        'inviteCodes/$inviteCode': null,
-      };
-
-      // Execute atomic batch update
-      await _dbRef.update(updates).then((_) async {
-        // Send success notifications after transaction completes
-        await Future.wait([
-          _sendPartnershipNotification(
-            inviterUid,
-            'Kết nối thành công!',
-            '${userProvider.currentUser!.displayName ?? "Người dùng"} đã chấp nhận lời mời kết nối của bạn.',
-            'partnership_accepted',
-          ),
-          _sendPartnershipNotification(
-            userProvider.currentUser!.uid,
-            'Kết nối thành công!',
-            'Bạn đã kết nối thành công với ${inviterData['displayName']?.toString() ?? "người dùng"}.',
-            'partnership_connected',
-          ),
-        ]);
-
-        // Trigger DataService sync to update local data
-        if (_dataService.isInitialized && _dataService.isOnline) {
-          unawaited(_dataService.forceSyncNow());
-        }
-
-        debugPrint('✅ Partnership đã tạo thành công: $partnershipId');
-      });
+      debugPrint('✅ Partnership created and both users notified');
     } catch (e) {
       debugPrint('❌ Lỗi khi chấp nhận mời: $e');
       rethrow;
     }
   }
 
-  /// Disconnect partnership
+  /// ✅ NEW: Execute partnership creation with proper notifications
+  Future<void> _executePartnershipCreation(
+    Partnership partnership,
+    String inviterUid,
+    UserProvider userProvider,
+    String inviteCode,
+    Map<dynamic, dynamic> inviterData,
+  ) async {
+    final partnershipId = partnership.id;
+    final currentUid = userProvider.currentUser!.uid;
+    final timestamp = ServerValue.timestamp;
+    final partnershipTimestamp = partnership.createdAt.millisecondsSinceEpoch;
+
+    // ✅ STEP 1: Create partnership record first
+    await _dbRef.child('partnerships').child(partnershipId).set({
+      'id': partnershipId,
+      'memberIds': {for (var id in partnership.memberIds) id: true},
+      'createdAt': partnershipTimestamp,
+      'memberNames': partnership.memberNames,
+      'isActive': true,
+      'lastSyncTime': timestamp,
+    });
+
+    debugPrint('✅ Partnership record created: $partnershipId');
+
+    // ✅ STEP 2: Update both users simultaneously with enhanced data
+    final userUpdates = <String, dynamic>{
+      // Update inviter with full partner info
+      'users/$inviterUid/partnershipId': partnershipId,
+      'users/$inviterUid/partnerUid': currentUid,
+      'users/$inviterUid/partnerDisplayName':
+          userProvider.currentUser!.displayName ?? 'Người dùng',
+      'users/$inviterUid/partnerPhotoURL': userProvider.currentUser!.photoURL,
+      'users/$inviterUid/partnershipCreatedAt': partnershipTimestamp,
+      'users/$inviterUid/currentInviteCode': null,
+      'users/$inviterUid/inviteCodeExpiry': null,
+      'users/$inviterUid/updatedAt': timestamp,
+      'users/$inviterUid/lastPartnerUpdate': timestamp,
+
+      // Update current user with full partner info
+      'users/$currentUid/partnershipId': partnershipId,
+      'users/$currentUid/partnerUid': inviterUid,
+      'users/$currentUid/partnerDisplayName':
+          inviterData['displayName']?.toString() ?? 'Người dùng',
+      'users/$currentUid/partnerPhotoURL': inviterData['photoURL']?.toString(),
+      'users/$currentUid/partnershipCreatedAt': partnershipTimestamp,
+      'users/$currentUid/updatedAt': timestamp,
+      'users/$currentUid/lastPartnerUpdate': timestamp,
+
+      // Remove invite code
+      'inviteCodes/$inviteCode': null,
+    };
+
+    await _dbRef.update(userUpdates);
+    debugPrint('✅ Both users updated with partnership info');
+
+    // ✅ STEP 3: Send immediate notifications
+    await _sendPartnershipNotifications(
+      inviterUid,
+      currentUid,
+      userProvider.currentUser!.displayName ?? 'Người dùng',
+      inviterData['displayName']?.toString() ?? 'Người dùng',
+    );
+
+    // ✅ STEP 4: Force refresh UserProvider data
+    await _forceRefreshUserProviders(inviterUid, currentUid);
+
+    // ✅ STEP 5: Trigger DataService sync
+    if (_dataService.isInitialized && _dataService.isOnline) {
+      unawaited(_dataService.forceSyncNow());
+    }
+  }
+
+  /// ✅ NEW: Send notifications to both users
+  Future<void> _sendPartnershipNotifications(
+    String inviterUid,
+    String currentUid,
+    String currentUserName,
+    String inviterName,
+  ) async {
+    try {
+      final timestamp = ServerValue.timestamp;
+
+      // Notification for inviter
+      await _dbRef.child('user_notifications').child(inviterUid).push().set({
+        'title': 'Kết nối thành công! 🎉',
+        'body': '$currentUserName đã chấp nhận lời mời kết nối của bạn.',
+        'type': 'partnership_accepted',
+        'timestamp': timestamp,
+        'isRead': false,
+        'priority': 'high',
+        'actionData': {
+          'partnerUid': currentUid,
+          'partnerName': currentUserName,
+        },
+      });
+
+      // Notification for current user
+      await _dbRef.child('user_notifications').child(currentUid).push().set({
+        'title': 'Kết nối thành công! 🎉',
+        'body': 'Bạn đã kết nối thành công với $inviterName.',
+        'type': 'partnership_connected',
+        'timestamp': timestamp,
+        'isRead': false,
+        'priority': 'high',
+        'actionData': {'partnerUid': inviterUid, 'partnerName': inviterName},
+      });
+
+      // ✅ IMPORTANT: Send real-time update trigger
+      await _dbRef.child('partnership_updates').push().set({
+        'type': 'partnership_created',
+        'partnershipId': 'temp', // Will be updated
+        'affectedUsers': [inviterUid, currentUid],
+        'timestamp': timestamp,
+      });
+
+      debugPrint('✅ Partnership notifications sent to both users');
+    } catch (e) {
+      debugPrint('❌ Error sending partnership notifications: $e');
+    }
+  }
+
+  /// ✅ NEW: Force refresh UserProviders for both users
+  Future<void> _forceRefreshUserProviders(
+    String inviterUid,
+    String currentUid,
+  ) async {
+    try {
+      // Send refresh trigger to both users
+      final refreshData = {
+        'type': 'partnership_update',
+        'timestamp': ServerValue.timestamp,
+        'requireRefresh': true,
+      };
+
+      await Future.wait([
+        _dbRef
+            .child('user_refresh_triggers')
+            .child(inviterUid)
+            .push()
+            .set(refreshData),
+        _dbRef
+            .child('user_refresh_triggers')
+            .child(currentUid)
+            .push()
+            .set(refreshData),
+      ]);
+
+      debugPrint('✅ Refresh triggers sent to both users');
+    } catch (e) {
+      debugPrint('❌ Error sending refresh triggers: $e');
+    }
+  }
+
   Future<void> disconnectPartnership(UserProvider userProvider) async {
     if (userProvider.currentUser == null) {
       throw Exception('Người dùng chưa đăng nhập');

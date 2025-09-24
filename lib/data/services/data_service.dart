@@ -299,7 +299,7 @@ class DataService extends ChangeNotifier {
       await _createIndexes(txn);
 
       // Create triggers
-      // await _createTriggers(txn);
+      await _createTriggers(txn);
     });
 
     debugPrint('✅ Database tables created successfully');
@@ -328,43 +328,119 @@ class DataService extends ChangeNotifier {
   }
 
   Future<void> _createTriggers(Transaction txn) async {
-    // Update wallet balance trigger
+    // Update wallet balance trigger - INSERT
     await txn.execute('''
-      CREATE TRIGGER update_wallet_balance_insert 
-      AFTER INSERT ON transactions
-      BEGIN
-        UPDATE wallets 
-        SET 
-          balance = balance + 
-            CASE NEW.type
-              WHEN 'income' THEN NEW.amount
-              WHEN 'expense' THEN -NEW.amount
-              WHEN 'transfer' THEN -NEW.amount
-            END,
-          updated_at = strftime('%s', 'now')
-        WHERE id = NEW.wallet_id;
-        
-        UPDATE wallets 
-        SET 
-          balance = balance + NEW.amount,
-          updated_at = strftime('%s', 'now')
-        WHERE id = NEW.transfer_to_wallet_id AND NEW.type = 'transfer';
-      END
-    ''');
+        CREATE TRIGGER update_wallet_balance_insert 
+        AFTER INSERT ON transactions
+        BEGIN
+          -- Update source wallet
+          UPDATE wallets 
+          SET 
+            balance = balance + 
+              CASE NEW.type
+                WHEN 'income' THEN NEW.amount
+                WHEN 'expense' THEN -NEW.amount
+                WHEN 'transfer' THEN -NEW.amount
+              END,
+            updated_at = strftime('%s', 'now')
+          WHERE id = NEW.wallet_id;
+          
+          -- Update destination wallet for transfers
+          UPDATE wallets 
+          SET 
+            balance = balance + NEW.amount,
+            updated_at = strftime('%s', 'now')
+          WHERE id = NEW.transfer_to_wallet_id AND NEW.type = 'transfer';
+        END
+      ''');
 
-    // Update category usage trigger
+    // Update wallet balance trigger - UPDATE (when transaction is modified)
     await txn.execute('''
-      CREATE TRIGGER update_category_usage 
-      AFTER INSERT ON transactions
-      WHEN NEW.category_id IS NOT NULL
-      BEGIN
-        UPDATE categories 
-        SET 
-          usage_count = usage_count + 1,
-          last_used = strftime('%s', 'now')
-        WHERE id = NEW.category_id;
-      END
-    ''');
+        CREATE TRIGGER update_wallet_balance_update 
+        AFTER UPDATE ON transactions
+        BEGIN
+          -- Revert old transaction effect
+          UPDATE wallets 
+          SET 
+            balance = balance - 
+              CASE OLD.type
+                WHEN 'income' THEN OLD.amount
+                WHEN 'expense' THEN -OLD.amount
+                WHEN 'transfer' THEN -OLD.amount
+              END,
+            updated_at = strftime('%s', 'now')
+          WHERE id = OLD.wallet_id;
+          
+          -- Revert old transfer destination
+          UPDATE wallets 
+          SET 
+            balance = balance - OLD.amount,
+            updated_at = strftime('%s', 'now')
+          WHERE id = OLD.transfer_to_wallet_id AND OLD.type = 'transfer';
+          
+          -- Apply new transaction effect
+          UPDATE wallets 
+          SET 
+            balance = balance + 
+              CASE NEW.type
+                WHEN 'income' THEN NEW.amount
+                WHEN 'expense' THEN -NEW.amount
+                WHEN 'transfer' THEN -NEW.amount
+              END,
+            updated_at = strftime('%s', 'now')
+          WHERE id = NEW.wallet_id;
+          
+          -- Apply new transfer destination
+          UPDATE wallets 
+          SET 
+            balance = balance + NEW.amount,
+            updated_at = strftime('%s', 'now')
+          WHERE id = NEW.transfer_to_wallet_id AND NEW.type = 'transfer';
+        END
+      ''');
+
+    // Update wallet balance trigger - DELETE
+    await txn.execute('''
+        CREATE TRIGGER update_wallet_balance_delete 
+        AFTER DELETE ON transactions
+        BEGIN
+          -- Revert transaction effect
+          UPDATE wallets 
+          SET 
+            balance = balance - 
+              CASE OLD.type
+                WHEN 'income' THEN OLD.amount
+                WHEN 'expense' THEN -OLD.amount
+                WHEN 'transfer' THEN -OLD.amount
+              END,
+            updated_at = strftime('%s', 'now')
+          WHERE id = OLD.wallet_id;
+          
+          -- Revert transfer destination
+          UPDATE wallets 
+          SET 
+            balance = balance - OLD.amount,
+            updated_at = strftime('%s', 'now')
+          WHERE id = OLD.transfer_to_wallet_id AND OLD.type = 'transfer';
+        END
+      ''');
+
+    // ✅ NEW: Update category usage trigger
+    await txn.execute('''
+        CREATE TRIGGER update_category_usage 
+        AFTER INSERT ON transactions
+        WHEN NEW.category_id IS NOT NULL
+        BEGIN
+          UPDATE categories 
+          SET 
+            usage_count = usage_count + 1,
+            last_used = strftime('%s', 'now'),
+            updated_at = strftime('%s', 'now')
+          WHERE id = NEW.category_id;
+        END
+      ''');
+
+    debugPrint('✅ Database triggers created successfully');
   }
 
   Future<void> _upgradeDatabase(
@@ -373,7 +449,6 @@ class DataService extends ChangeNotifier {
     int newVersion,
   ) async {
     debugPrint('🔄 Upgrading database from v$oldVersion to v$newVersion');
-    // Add migration logic here if needed
   }
 
   // ============ CONNECTIVITY MANAGEMENT ============
@@ -516,7 +591,6 @@ class DataService extends ChangeNotifier {
         }
       }
 
-      // ✅ FIX: Validate wallet exists
       final walletExists = await txn.query(
         'wallets',
         where: 'id = ? OR firebase_id = ?',
@@ -637,7 +711,6 @@ class DataService extends ChangeNotifier {
     debugPrint('✅ Transaction added safely: ${transaction.description}');
   }
 
-  /// Get wallets with offline-first support
   Future<List<Wallet>> getWallets({bool includeArchived = false}) async {
     if (!_isInitialized || _localDatabase == null || currentUserId == null) {
       return [];
@@ -647,7 +720,6 @@ class DataService extends ChangeNotifier {
       String whereClause = 'owner_id = ?';
       List<dynamic> whereArgs = [currentUserId];
 
-      // Include partnership wallets if user has partnership
       if (partnershipId != null) {
         whereClause = '(owner_id = ? OR owner_id = ?)';
         whereArgs = [currentUserId, partnershipId!];
@@ -3478,6 +3550,524 @@ class DataService extends ChangeNotifier {
       debugPrint('✅ Category-budget relationships validated');
     } catch (e) {
       debugPrint('❌ Error validating category-budget relationships: $e');
+    }
+  }
+
+  Future<void> forceUploadAllLocalData() async {
+    if (!_isOnline || _localDatabase == null || currentUserId == null) {
+      throw Exception('Cannot sync: offline or not initialized');
+    }
+
+    debugPrint('🔄 Force uploading ALL local data to Firebase...');
+
+    try {
+      _isSyncing = true;
+      _lastError = null;
+      notifyListeners();
+
+      // 1. Upload transactions
+      await _forceUploadTransactions();
+
+      // 2. Upload wallets
+      await _forceUploadWallets();
+
+      // 3. Upload categories
+      await _forceUploadCategories();
+
+      // 4. Upload budgets
+      await _forceUploadBudgets();
+
+      // 5. Update sync metadata
+      _lastSyncTime = DateTime.now();
+      await _updateSyncMetadata();
+
+      debugPrint('✅ Force upload completed successfully');
+    } catch (e) {
+      _lastError = 'Force upload failed: $e';
+      debugPrint('❌ Force upload failed: $e');
+      rethrow;
+    } finally {
+      _isSyncing = false;
+      await _updatePendingItemsCount();
+      notifyListeners();
+    }
+  }
+
+  /// ✅ NEW: Force upload all transactions
+  Future<void> _forceUploadTransactions() async {
+    try {
+      debugPrint('📤 Force uploading transactions...');
+
+      final transactions = await _localDatabase!.query(
+        'transactions',
+        where: 'user_id = ?',
+        whereArgs: [currentUserId],
+        orderBy: 'created_at ASC',
+      );
+
+      if (transactions.isEmpty) {
+        debugPrint('ℹ️ No transactions to upload');
+        return;
+      }
+
+      int uploadedCount = 0;
+      final batchUpdates = <String, dynamic>{};
+
+      for (final txnData in transactions) {
+        final txnId = txnData['id'] as String;
+        final firebaseId = txnData['firebase_id'] as String? ?? txnId;
+
+        // Convert local data to Firebase format
+        final firebaseData = _convertTransactionToFirebaseFormat(txnData);
+
+        batchUpdates['transactions/$firebaseId'] = firebaseData;
+        uploadedCount++;
+
+        // Update local record with Firebase ID
+        await _localDatabase!.update(
+          'transactions',
+          {
+            'firebase_id': firebaseId,
+            'sync_status': 1, // Synced
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'id = ?',
+          whereArgs: [txnId],
+        );
+      }
+
+      // Batch upload to Firebase
+      if (batchUpdates.isNotEmpty) {
+        await _firebaseRef.update(batchUpdates);
+        debugPrint('✅ Uploaded $uploadedCount transactions');
+      }
+    } catch (e) {
+      debugPrint('❌ Error force uploading transactions: $e');
+      rethrow;
+    }
+  }
+
+  /// ✅ NEW: Force upload all wallets
+  Future<void> _forceUploadWallets() async {
+    try {
+      debugPrint('📤 Force uploading wallets...');
+
+      // Get user's wallets (personal + partnership)
+      String whereClause = 'owner_id = ?';
+      List<dynamic> whereArgs = [currentUserId];
+
+      if (partnershipId != null) {
+        whereClause = '(owner_id = ? OR owner_id = ?)';
+        whereArgs = [currentUserId, partnershipId!];
+      }
+
+      final wallets = await _localDatabase!.query(
+        'wallets',
+        where: whereClause,
+        whereArgs: whereArgs,
+      );
+
+      if (wallets.isEmpty) {
+        debugPrint('ℹ️ No wallets to upload');
+        return;
+      }
+
+      int uploadedCount = 0;
+      final batchUpdates = <String, dynamic>{};
+
+      for (final walletData in wallets) {
+        final walletId = walletData['id'] as String;
+        final firebaseId = walletData['firebase_id'] as String? ?? walletId;
+
+        // Convert local data to Firebase format
+        final firebaseData = _convertWalletToFirebaseFormat(walletData);
+
+        batchUpdates['wallets/$firebaseId'] = firebaseData;
+        uploadedCount++;
+
+        // Update local record
+        await _localDatabase!.update(
+          'wallets',
+          {
+            'firebase_id': firebaseId,
+            'sync_status': 1, // Synced
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'id = ?',
+          whereArgs: [walletId],
+        );
+      }
+
+      // Batch upload to Firebase
+      if (batchUpdates.isNotEmpty) {
+        await _firebaseRef.update(batchUpdates);
+        debugPrint('✅ Uploaded $uploadedCount wallets');
+      }
+    } catch (e) {
+      debugPrint('❌ Error force uploading wallets: $e');
+      rethrow;
+    }
+  }
+
+  /// ✅ NEW: Force upload all categories
+  Future<void> _forceUploadCategories() async {
+    try {
+      debugPrint('📤 Force uploading categories...');
+
+      // Get user's categories (personal + partnership)
+      String whereClause = 'owner_id = ?';
+      List<dynamic> whereArgs = [currentUserId];
+
+      if (partnershipId != null) {
+        whereClause = '(owner_id = ? OR owner_id = ?)';
+        whereArgs = [currentUserId, partnershipId!];
+      }
+
+      final categories = await _localDatabase!.query(
+        'categories',
+        where: whereClause,
+        whereArgs: whereArgs,
+      );
+
+      if (categories.isEmpty) {
+        debugPrint('ℹ️ No categories to upload');
+        return;
+      }
+
+      int uploadedCount = 0;
+      final batchUpdates = <String, dynamic>{};
+
+      for (final categoryData in categories) {
+        final categoryId = categoryData['id'] as String;
+        final firebaseId = categoryData['firebase_id'] as String? ?? categoryId;
+
+        // Convert local data to Firebase format
+        final firebaseData = _convertCategoryToFirebaseFormat(categoryData);
+
+        batchUpdates['categories/$firebaseId'] = firebaseData;
+        uploadedCount++;
+
+        // Update local record
+        await _localDatabase!.update(
+          'categories',
+          {
+            'firebase_id': firebaseId,
+            'sync_status': 1, // Synced
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'id = ?',
+          whereArgs: [categoryId],
+        );
+      }
+
+      // Batch upload to Firebase
+      if (batchUpdates.isNotEmpty) {
+        await _firebaseRef.update(batchUpdates);
+        debugPrint('✅ Uploaded $uploadedCount categories');
+      }
+    } catch (e) {
+      debugPrint('❌ Error force uploading categories: $e');
+      rethrow;
+    }
+  }
+
+  /// ✅ NEW: Force upload all budgets
+  Future<void> _forceUploadBudgets() async {
+    try {
+      debugPrint('📤 Force uploading budgets...');
+
+      // Get user's budgets (personal + partnership)
+      String whereClause = 'owner_id = ?';
+      List<dynamic> whereArgs = [currentUserId];
+
+      if (partnershipId != null) {
+        whereClause = '(owner_id = ? OR owner_id = ?)';
+        whereArgs = [currentUserId, partnershipId!];
+      }
+
+      final budgets = await _localDatabase!.query(
+        'budgets',
+        where: whereClause,
+        whereArgs: whereArgs,
+      );
+
+      if (budgets.isEmpty) {
+        debugPrint('ℹ️ No budgets to upload');
+        return;
+      }
+
+      int uploadedCount = 0;
+      final batchUpdates = <String, dynamic>{};
+
+      for (final budgetData in budgets) {
+        final budgetId = budgetData['id'] as String;
+        final firebaseId = budgetData['firebase_id'] as String? ?? budgetId;
+
+        // Convert local data to Firebase format
+        final firebaseData = _convertBudgetToFirebaseFormat(budgetData);
+
+        batchUpdates['budgets/$firebaseId'] = firebaseData;
+        uploadedCount++;
+
+        // Update local record
+        await _localDatabase!.update(
+          'budgets',
+          {
+            'firebase_id': firebaseId,
+            'sync_status': 1, // Synced
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'id = ?',
+          whereArgs: [budgetId],
+        );
+      }
+
+      // Batch upload to Firebase
+      if (batchUpdates.isNotEmpty) {
+        await _firebaseRef.update(batchUpdates);
+        debugPrint('✅ Uploaded $uploadedCount budgets');
+      }
+    } catch (e) {
+      debugPrint('❌ Error force uploading budgets: $e');
+      rethrow;
+    }
+  }
+
+  // ============ DATA CONVERSION METHODS ============
+
+  Map<String, dynamic> _convertTransactionToFirebaseFormat(
+    Map<String, dynamic> localData,
+  ) {
+    return {
+      'id': localData['id'],
+      'amount': localData['amount'],
+      'type': localData['type'],
+      'categoryId': localData['category_id'],
+      'walletId': localData['wallet_id'],
+      'date': localData['date'],
+      'description': localData['description'],
+      'userId': localData['user_id'],
+      'subCategoryId': localData['sub_category_id'],
+      'transferToWalletId': localData['transfer_to_wallet_id'],
+      'createdBy': localData['created_by'],
+      'version': localData['version'] ?? 1,
+      'createdAt': (localData['created_at'] as int?) != null
+          ? localData['created_at'] *
+                1000 // Convert to milliseconds
+          : DateTime.now().millisecondsSinceEpoch,
+      'updatedAt': ServerValue.timestamp,
+    };
+  }
+
+  Map<String, dynamic> _convertWalletToFirebaseFormat(
+    Map<String, dynamic> localData,
+  ) {
+    return {
+      'id': localData['id'],
+      'name': localData['name'],
+      'balance': localData['balance'],
+      'ownerId': localData['owner_id'],
+      'isVisibleToPartner': (localData['is_visible_to_partner'] ?? 1) == 1,
+      'type': localData['wallet_type'] ?? 'general',
+      'currency': localData['currency'] ?? 'VND',
+      'isArchived': (localData['is_archived'] ?? 0) == 1,
+      'version': localData['version'] ?? 1,
+      'createdAt': (localData['created_at'] as int?) != null
+          ? localData['created_at'] * 1000
+          : DateTime.now().millisecondsSinceEpoch,
+      'updatedAt': ServerValue.timestamp,
+    };
+  }
+
+  Map<String, dynamic> _convertCategoryToFirebaseFormat(
+    Map<String, dynamic> localData,
+  ) {
+    Map<String, String> subCategories = {};
+    try {
+      final subCatsJson = localData['sub_categories'] as String?;
+      if (subCatsJson != null && subCatsJson.isNotEmpty) {
+        subCategories = Map<String, String>.from(jsonDecode(subCatsJson));
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error parsing subcategories: $e');
+    }
+
+    return {
+      'id': localData['id'],
+      'name': localData['name'],
+      'ownerId': localData['owner_id'],
+      'type': localData['type'],
+      'iconCodePoint': localData['icon_code_point'],
+      'subCategories': subCategories,
+      'ownershipType': localData['ownership_type'] ?? 'personal',
+      'createdBy': localData['created_by'],
+      'isArchived': (localData['is_archived'] ?? 0) == 1,
+      'usageCount': localData['usage_count'] ?? 0,
+      'lastUsed': localData['last_used'],
+      'version': localData['version'] ?? 1,
+      'createdAt': (localData['created_at'] as int?) != null
+          ? localData['created_at'] * 1000
+          : DateTime.now().millisecondsSinceEpoch,
+      'updatedAt': ServerValue.timestamp,
+    };
+  }
+
+  Map<String, dynamic> _convertBudgetToFirebaseFormat(
+    Map<String, dynamic> localData,
+  ) {
+    Map<String, double> categoryAmounts = {};
+    try {
+      final categoryJson = localData['category_amounts'] as String?;
+      if (categoryJson != null && categoryJson.isNotEmpty) {
+        categoryAmounts = Map<String, double>.from(jsonDecode(categoryJson));
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error parsing category amounts: $e');
+    }
+
+    return {
+      'id': localData['id'],
+      'ownerId': localData['owner_id'],
+      'month': localData['month'],
+      'totalAmount': localData['total_amount'],
+      'categoryAmounts': categoryAmounts,
+      'budgetType': localData['budget_type'] ?? 'personal',
+      'period': localData['period'] ?? 'monthly',
+      'createdBy': localData['created_by'],
+      'startDate': localData['start_date'],
+      'endDate': localData['end_date'],
+      'isActive': (localData['is_active'] ?? 1) == 1,
+      'isDeleted': (localData['is_deleted'] ?? 0) == 1,
+      'version': localData['version'] ?? 1,
+      'createdAt': (localData['created_at'] as int?) != null
+          ? localData['created_at'] * 1000
+          : DateTime.now().millisecondsSinceEpoch,
+      'updatedAt': ServerValue.timestamp,
+    };
+  }
+
+  /// ✅ NEW: Check if Firebase has data for current user
+  Future<bool> checkFirebaseHasUserData() async {
+    if (!_isOnline || currentUserId == null) {
+      return false;
+    }
+
+    try {
+      // Check if user has any data in Firebase
+      final checks = await Future.wait([
+        _firebaseRef
+            .child('transactions')
+            .orderByChild('userId')
+            .equalTo(currentUserId)
+            .limitToFirst(1)
+            .get(),
+        _firebaseRef
+            .child('wallets')
+            .orderByChild('ownerId')
+            .equalTo(currentUserId)
+            .limitToFirst(1)
+            .get(),
+        _firebaseRef
+            .child('categories')
+            .orderByChild('ownerId')
+            .equalTo(currentUserId)
+            .limitToFirst(1)
+            .get(),
+      ]);
+
+      final hasTransactions = checks[0].exists;
+      final hasWallets = checks[1].exists;
+      final hasCategories = checks[2].exists;
+
+      debugPrint(
+        'Firebase data check: transactions=$hasTransactions, wallets=$hasWallets, categories=$hasCategories',
+      );
+
+      return hasTransactions || hasWallets || hasCategories;
+    } catch (e) {
+      debugPrint('❌ Error checking Firebase data: $e');
+      return false;
+    }
+  }
+
+  /// ✅ ENHANCED: Smart sync that detects data state
+  Future<void> performSmartSync() async {
+    if (!_isOnline || currentUserId == null) {
+      debugPrint('⚠️ Cannot perform smart sync: offline or no user');
+      return;
+    }
+
+    try {
+      debugPrint('🧠 Performing smart sync...');
+
+      // 1. Check if Firebase has user data
+      final firebaseHasData = await checkFirebaseHasUserData();
+
+      // 2. Check if local database has data
+      final localHasData = await _checkLocalHasUserData();
+
+      debugPrint(
+        'Smart sync analysis: Firebase=$firebaseHasData, Local=$localHasData',
+      );
+
+      if (!firebaseHasData && localHasData) {
+        // Firebase is empty but local has data - force upload all local data
+        debugPrint('🔄 Firebase empty, uploading all local data...');
+        await forceUploadAllLocalData();
+      } else if (firebaseHasData && !localHasData) {
+        // Firebase has data but local is empty - download from Firebase
+        debugPrint('🔄 Local empty, downloading from Firebase...');
+        await _downloadChangesFromFirebase();
+      } else if (firebaseHasData && localHasData) {
+        // Both have data - perform normal sync
+        debugPrint('🔄 Both have data, performing normal sync...');
+        await _performIntelligentSync();
+      } else {
+        // Both are empty - nothing to sync
+        debugPrint('ℹ️ Both Firebase and local are empty');
+      }
+    } catch (e) {
+      debugPrint('❌ Error in smart sync: $e');
+      rethrow;
+    }
+  }
+
+  /// ✅ NEW: Check if local database has user data
+  Future<bool> _checkLocalHasUserData() async {
+    if (_localDatabase == null || currentUserId == null) {
+      return false;
+    }
+
+    try {
+      final checks = await Future.wait([
+        _localDatabase!.query(
+          'transactions',
+          where: 'user_id = ?',
+          whereArgs: [currentUserId],
+          limit: 1,
+        ),
+        _localDatabase!.query(
+          'wallets',
+          where: 'owner_id = ?',
+          whereArgs: [currentUserId],
+          limit: 1,
+        ),
+        _localDatabase!.query(
+          'categories',
+          where: 'owner_id = ?',
+          whereArgs: [currentUserId],
+          limit: 1,
+        ),
+      ]);
+
+      final hasTransactions = checks[0].isNotEmpty;
+      final hasWallets = checks[1].isNotEmpty;
+      final hasCategories = checks[2].isNotEmpty;
+
+      return hasTransactions || hasWallets || hasCategories;
+    } catch (e) {
+      debugPrint('❌ Error checking local data: $e');
+      return false;
     }
   }
 

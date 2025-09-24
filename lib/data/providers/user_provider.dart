@@ -22,10 +22,14 @@ class UserProvider with ChangeNotifier {
   StreamSubscription? _partnershipSubscription;
   StreamSubscription? _notificationSubscription;
 
+  StreamSubscription? _refreshTriggerSubscription;
+  StreamSubscription? _partnershipUpdateSubscription;
+
   // State management
   bool _isInitialized = false;
   bool _isLoading = false;
   String? _error;
+  bool _mounted = false;
 
   // Current user data
   AppUser? _currentUser;
@@ -85,6 +89,12 @@ class UserProvider with ChangeNotifier {
       _listenToUserProfile(user.uid);
       _listenToNotifications(user.uid);
 
+      // ✅ NEW: Listen to refresh triggers
+      _listenToRefreshTriggers(user.uid);
+
+      // ✅ NEW: Listen to partnership updates
+      _listenToPartnershipUpdates();
+
       // Load user data
       await refreshUser();
 
@@ -97,6 +107,96 @@ class UserProvider with ChangeNotifier {
     } catch (e) {
       _setError('Lỗi khi đăng nhập: $e');
     }
+  }
+
+  void _listenToRefreshTriggers(String uid) {
+    _refreshTriggerSubscription?.cancel();
+
+    _refreshTriggerSubscription = _dbRef
+        .child('user_refresh_triggers')
+        .child(uid)
+        .onChildAdded
+        .listen((event) async {
+          if (!event.snapshot.exists) return;
+
+          try {
+            final triggerData = event.snapshot.value as Map<dynamic, dynamic>;
+            final triggerType = triggerData['type'] as String?;
+            final requireRefresh =
+                triggerData['requireRefresh'] as bool? ?? false;
+
+            debugPrint('🔔 Refresh trigger received: $triggerType');
+
+            if (requireRefresh) {
+              // Force refresh user data
+              await refreshUser();
+
+              // Re-validate partnership
+              if (_partnershipId != null) {
+                await _validateAndRefreshPartnership();
+              }
+
+              debugPrint('✅ User data refreshed due to trigger');
+            }
+
+            // Clean up the trigger after processing
+            await event.snapshot.ref.remove();
+          } catch (e) {
+            debugPrint('❌ Error processing refresh trigger: $e');
+          }
+        });
+
+    debugPrint('👂 Refresh trigger listener setup for: $uid');
+  }
+
+  /// ✅ NEW: Listen to partnership updates globally
+  void _listenToPartnershipUpdates() {
+    _partnershipUpdateSubscription?.cancel();
+
+    _partnershipUpdateSubscription = _dbRef
+        .child('partnership_updates')
+        .orderByChild('timestamp')
+        .limitToLast(10)
+        .onChildAdded
+        .listen((event) async {
+          if (!event.snapshot.exists) return;
+
+          try {
+            final updateData = event.snapshot.value as Map<dynamic, dynamic>;
+            final affectedUsers = List<String>.from(
+              updateData['affectedUsers'] ?? [],
+            );
+            final updateType = updateData['type'] as String?;
+
+            // Check if current user is affected
+            if (currentUser != null &&
+                affectedUsers.contains(currentUser!.uid)) {
+              debugPrint('🔔 Partnership update received: $updateType');
+
+              // Refresh user data
+              await refreshUser();
+
+              if (_partnershipId != null) {
+                await _validateAndRefreshPartnership();
+              }
+
+              debugPrint('✅ Partnership data refreshed due to update');
+            }
+
+            // Clean up old updates (older than 5 minutes)
+            final timestamp = updateData['timestamp'] as int?;
+            if (timestamp != null) {
+              final updateTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+              if (DateTime.now().difference(updateTime).inMinutes > 5) {
+                await event.snapshot.ref.remove();
+              }
+            }
+          } catch (e) {
+            debugPrint('❌ Error processing partnership update: $e');
+          }
+        });
+
+    debugPrint('👂 Partnership update listener setup');
   }
 
   Future<void> _handleUserSignOut() async {
@@ -117,12 +217,26 @@ class UserProvider with ChangeNotifier {
       try {
         final userData = event.snapshot.value as Map<dynamic, dynamic>;
         final newPartnershipId = userData['partnershipId'] as String?;
+        final lastPartnerUpdate = userData['lastPartnerUpdate'] as int?;
+
+        // ✅ CHECK: If this is a partnership-related update
+        final isPartnershipUpdate =
+            lastPartnerUpdate != null &&
+            (DateTime.now().millisecondsSinceEpoch - lastPartnerUpdate) <
+                10000; // Within 10 seconds
+
+        if (isPartnershipUpdate) {
+          debugPrint('🔔 Partnership-related profile update detected');
+        }
 
         // Update current user data
         _currentUser = AppUser.fromMap(userData, uid);
 
         // Check for partnership changes
         if (newPartnershipId != _partnershipId) {
+          debugPrint(
+            '🔄 Partnership ID changed: $_partnershipId -> $newPartnershipId',
+          );
           await _handlePartnershipChange(newPartnershipId, userData);
         } else if (newPartnershipId != null) {
           // Update partner info if partnership exists but data changed
@@ -131,6 +245,17 @@ class UserProvider with ChangeNotifier {
 
         await _savePartnershipState();
         notifyListeners();
+
+        // ✅ ADDITIONAL: Force UI update for partnership changes
+        if (isPartnershipUpdate) {
+          debugPrint('🎯 Forcing UI update due to partnership change');
+          notifyListeners();
+
+          // Small delay then notify again to ensure UI updates
+          Future.delayed(const Duration(milliseconds: 100), () {
+            if (_mounted) notifyListeners();
+          });
+        }
       } catch (e) {
         _setError('Lỗi cập nhật profile: $e');
       }
@@ -145,14 +270,30 @@ class UserProvider with ChangeNotifier {
     _partnershipId = newPartnershipId;
 
     if (newPartnershipId != null) {
-      // New partnership created
-      await _setupNewPartnership(userData);
+      // New partnership created - immediately update all partner info
+      _partnerUid = userData['partnerUid'] as String?;
+      _partnerDisplayName = userData['partnerDisplayName'] as String?;
+      _partnerPhotoURL = userData['partnerPhotoURL'] as String?;
+      _partnershipCreationDate = userData['partnershipCreatedAt'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(
+              userData['partnershipCreatedAt'],
+            )
+          : null;
 
-      if (oldPartnershipId != newPartnershipId) {
-        debugPrint(
-          '🔗 Partnership changed: $oldPartnershipId -> $newPartnershipId',
-        );
+      // ✅ IMMEDIATE: Setup listeners for new partner
+      if (_partnerUid != null) {
+        _listenToPartnerProfile(_partnerUid!);
       }
+
+      if (_partnershipId != null) {
+        _listenToPartnership(_partnershipId!);
+      }
+
+      // ✅ FORCE NOTIFICATION: Ensure UI updates immediately
+      notifyListeners();
+
+      debugPrint('✅ New partnership setup completed: $newPartnershipId');
+      debugPrint('   Partner: $_partnerDisplayName ($_partnerUid)');
     } else {
       // Partnership removed
       await _clearPartnershipData();
@@ -692,10 +833,13 @@ class UserProvider with ChangeNotifier {
 
   @override
   void dispose() {
+    _mounted = false;
     _userProfileSubscription?.cancel();
     _partnerProfileSubscription?.cancel();
     _partnershipSubscription?.cancel();
     _notificationSubscription?.cancel();
+    _refreshTriggerSubscription?.cancel(); // ✅ NEW
+    _partnershipUpdateSubscription?.cancel(); // ✅ NEW
     super.dispose();
   }
 }

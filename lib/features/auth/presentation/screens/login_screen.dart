@@ -16,9 +16,8 @@ class LoginScreen extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Có thể thêm logo của app ở đây
               Text(
-                'Mint Wallet',
+                'Sun Money',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 32,
@@ -28,7 +27,7 @@ class LoginScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               const Text(
-                'Quản lý chi tiêu cá nhân và gia đình một cách thông minh',
+                'Quản lý chi tiêu cá nhân và đối tác một cách thông minh',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16),
               ),
