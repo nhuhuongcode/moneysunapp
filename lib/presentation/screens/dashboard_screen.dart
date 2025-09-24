@@ -373,10 +373,10 @@ class _DashboardScreenState extends State<DashboardScreen>
         physics: const BouncingScrollPhysics(),
         slivers: [
           // Partnership banner (if applicable)
-          if (userProvider.hasPartner) _buildPartnershipBanner(userProvider),
+          //if (userProvider.hasPartner) _buildPartnershipBanner(userProvider),
 
           // Quick stats header
-          _buildQuickStatsSliver(userProvider),
+          //_buildQuickStatsSliver(userProvider),
 
           // Main content
           SliverPadding(

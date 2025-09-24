@@ -11,7 +11,6 @@ import 'package:moneysun/data/providers/category_provider.dart';
 import 'package:moneysun/data/providers/connection_status_provider.dart';
 import 'package:moneysun/data/providers/budget_provider.dart';
 import 'package:moneysun/presentation/widgets/smart_amount_input.dart';
-import 'package:moneysun/presentation/widgets/category_ownership_selector.dart';
 
 class BudgetScreen extends StatefulWidget {
   const BudgetScreen({super.key});

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:moneysun/data/models/category_model.dart';
 import 'package:provider/provider.dart';
 import 'package:moneysun/data/services/auth_service.dart';
 import 'package:moneysun/data/services/partnership_service.dart';
@@ -12,7 +13,6 @@ import 'package:moneysun/data/providers/transaction_provider.dart';
 import 'package:moneysun/data/providers/category_provider.dart';
 import 'package:moneysun/presentation/screens/manage_categories_screen.dart';
 import 'package:moneysun/presentation/screens/manage_wallets_screen.dart';
-import 'package:moneysun/presentation/widgets/enhanced_category_creation.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -1857,13 +1857,313 @@ class _ProfileScreenState extends State<ProfileScreen>
   Future<void> _createDefaultCategories() async {
     try {
       final userProvider = Provider.of<UserProvider>(context, listen: false);
-      await DefaultCategoriesCreator.createDefaultCategoriesIfNeeded(
-        userProvider,
+      final categoryProvider = Provider.of<CategoryProvider>(
+        context,
+        listen: false,
       );
-      _showSuccessSnackBar('Đã tạo danh mục mặc định!');
+
+      // Show loading indicator
+      _showLoadingSnackBar('Đang tạo danh mục mặc định...');
+
+      // Check if user already has categories
+      final existingCategories = categoryProvider.categories;
+      if (existingCategories.length >= 10) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        _showInfoSnackBar('Bạn đã có đủ danh mục rồi!');
+        return;
+      }
+
+      // Default expense categories with icons
+      final defaultExpenseCategories = [
+        {'name': 'Ăn uống', 'icon': 0xe554}, // restaurant
+        {'name': 'Di chuyển', 'icon': 0xe539}, // directions_car
+        {'name': 'Mua sắm', 'icon': 0xe59c}, // shopping_bag
+        {'name': 'Giải trí', 'icon': 0xe01d}, // movie
+        {'name': 'Hóa đơn', 'icon': 0xe0c3}, // receipt
+        {'name': 'Y tế', 'icon': 0xe2bf}, // local_hospital
+        {'name': 'Giáo dục', 'icon': 0xe80c}, // school
+        {'name': 'Khác', 'icon': 0xe94f}, // more_horiz
+      ];
+
+      // Default income categories with icons
+      final defaultIncomeCategories = [
+        {'name': 'Lương', 'icon': 0xe2c8}, // work
+        {'name': 'Thưởng', 'icon': 0xe263}, // card_giftcard
+        {'name': 'Đầu tư', 'icon': 0xe1db}, // trending_up
+        {'name': 'Kinh doanh', 'icon': 0xe1a4}, // business
+        {'name': 'Khác', 'icon': 0xe94f}, // more_horiz
+      ];
+
+      int successCount = 0;
+      int errorCount = 0;
+      final List<String> createdCategories = [];
+      final List<String> skippedCategories = [];
+
+      // Create personal expense categories
+      for (final category in defaultExpenseCategories) {
+        final name = category['name'] as String;
+
+        // Check if category already exists
+        final exists = existingCategories.any(
+          (c) =>
+              c.name.toLowerCase() == name.toLowerCase() &&
+              c.type == 'expense' &&
+              c.ownershipType == CategoryOwnershipType.personal,
+        );
+
+        if (exists) {
+          skippedCategories.add(name);
+          continue;
+        }
+
+        try {
+          final success = await categoryProvider.addCategory(
+            name: name,
+            type: 'expense',
+            ownershipType: CategoryOwnershipType.personal,
+            iconCodePoint: category['icon'] as int,
+          );
+
+          if (success) {
+            successCount++;
+            createdCategories.add(name);
+            debugPrint('✅ Created expense category: $name');
+          } else {
+            errorCount++;
+            debugPrint('❌ Failed to create expense category: $name');
+          }
+
+          // Small delay to avoid overwhelming the system
+          await Future.delayed(const Duration(milliseconds: 100));
+        } catch (e) {
+          errorCount++;
+          debugPrint('❌ Error creating expense category $name: $e');
+        }
+      }
+
+      // Create personal income categories
+      for (final category in defaultIncomeCategories) {
+        final name = category['name'] as String;
+
+        // Check if category already exists
+        final exists = existingCategories.any(
+          (c) =>
+              c.name.toLowerCase() == name.toLowerCase() &&
+              c.type == 'income' &&
+              c.ownershipType == CategoryOwnershipType.personal,
+        );
+
+        if (exists) {
+          skippedCategories.add(name);
+          continue;
+        }
+
+        try {
+          final success = await categoryProvider.addCategory(
+            name: name,
+            type: 'income',
+            ownershipType: CategoryOwnershipType.personal,
+            iconCodePoint: category['icon'] as int,
+          );
+
+          if (success) {
+            successCount++;
+            createdCategories.add(name);
+            debugPrint('✅ Created income category: $name');
+          } else {
+            errorCount++;
+            debugPrint('❌ Failed to create income category: $name');
+          }
+
+          // Small delay to avoid overwhelming the system
+          await Future.delayed(const Duration(milliseconds: 100));
+        } catch (e) {
+          errorCount++;
+          debugPrint('❌ Error creating income category $name: $e');
+        }
+      }
+
+      // Create shared categories if user has partner
+      if (userProvider.hasPartner) {
+        final sharedCategories = [
+          {'name': 'Chi tiêu chung', 'type': 'expense', 'icon': 0xe88a}, // home
+          {
+            'name': 'Thu nhập chung',
+            'type': 'income',
+            'icon': 0xe2bc,
+          }, // savings
+        ];
+
+        for (final category in sharedCategories) {
+          final name = category['name'] as String;
+          final type = category['type'] as String;
+
+          // Check if category already exists
+          final exists = existingCategories.any(
+            (c) =>
+                c.name.toLowerCase() == name.toLowerCase() &&
+                c.type == type &&
+                c.ownershipType == CategoryOwnershipType.shared,
+          );
+
+          if (exists) {
+            skippedCategories.add(name);
+            continue;
+          }
+
+          try {
+            final success = await categoryProvider.addCategory(
+              name: name,
+              type: type,
+              ownershipType: CategoryOwnershipType.shared,
+              iconCodePoint: category['icon'] as int,
+            );
+
+            if (success) {
+              successCount++;
+              createdCategories.add(name);
+              debugPrint('✅ Created shared category: $name');
+            } else {
+              errorCount++;
+              debugPrint('❌ Failed to create shared category: $name');
+            }
+
+            // Small delay
+            await Future.delayed(const Duration(milliseconds: 100));
+          } catch (e) {
+            errorCount++;
+            debugPrint('❌ Error creating shared category $name: $e');
+          }
+        }
+      }
+
+      // Hide loading indicator
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      // Refresh categories list to show new categories
+      await categoryProvider.loadCategories(forceRefresh: true);
+
+      // Show result message
+      if (successCount > 0) {
+        String message = 'Đã tạo $successCount danh mục mặc định';
+
+        if (skippedCategories.isNotEmpty) {
+          message += ' (${skippedCategories.length} đã tồn tại)';
+        }
+
+        if (errorCount > 0) {
+          message += ' ($errorCount lỗi)';
+        }
+
+        _showSuccessSnackBar(message);
+
+        // Log created categories for debugging
+        debugPrint(
+          '✅ Successfully created categories: ${createdCategories.join(", ")}',
+        );
+        if (skippedCategories.isNotEmpty) {
+          debugPrint(
+            'ℹ️ Skipped existing categories: ${skippedCategories.join(", ")}',
+          );
+        }
+      } else if (skippedCategories.isNotEmpty) {
+        _showInfoSnackBar('Tất cả danh mục mặc định đã tồn tại rồi!');
+      } else {
+        _showErrorSnackBar('Không thể tạo danh mục mặc định nào');
+      }
     } catch (e) {
+      // Hide loading if still showing
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      debugPrint('❌ Error in _createDefaultCategories: $e');
       _showErrorSnackBar('Lỗi khi tạo danh mục: ${_getErrorMessage(e)}');
     }
+  }
+
+  // ✅ HELPER METHOD: Show loading snackbar
+  void _showLoadingSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: Colors.blue,
+        duration: const Duration(seconds: 30), // Long duration for loading
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  // ✅ HELPER METHOD: Show info snackbar
+  void _showInfoSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.info_rounded, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: Colors.orange,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  // ✅ ENHANCED: _showSuccessSnackBar và _showErrorSnackBar (nếu chưa có)
+  void _showSuccessSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle_rounded, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error_rounded, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 5),
+      ),
+    );
   }
 
   void _showSignOutDialog() {
@@ -1934,44 +2234,6 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   void _showFeatureNotImplemented(String feature) {
     _showErrorSnackBar('$feature chưa được triển khai');
-  }
-
-  // ============ UI HELPERS ============
-
-  void _showSuccessSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.check_circle_rounded, color: Colors.white),
-            const SizedBox(width: 12),
-            Expanded(child: Text(message)),
-          ],
-        ),
-        backgroundColor: Colors.green,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(16),
-      ),
-    );
-  }
-
-  void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.error_rounded, color: Colors.white),
-            const SizedBox(width: 12),
-            Expanded(child: Text(message)),
-          ],
-        ),
-        backgroundColor: Colors.red,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(16),
-      ),
-    );
   }
 
   @override

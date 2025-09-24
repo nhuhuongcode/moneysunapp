@@ -738,21 +738,28 @@ class DataService extends ChangeNotifier {
     }
   }
 
-  /// Get categories with offline-first support
   Future<List<Category>> getCategories({bool includeArchived = false}) async {
-    if (!_isInitialized || _localDatabase == null || currentUserId == null) {
+    if (!isInitialized || _localDatabase == null) {
+      debugPrint('⚠️ DataService not initialized, returning empty list');
+      return [];
+    }
+
+    if (currentUserId == null) {
+      debugPrint('⚠️ No current user, returning empty list');
       return [];
     }
 
     try {
-      String whereClause = 'owner_id = ?';
+      String whereClause = '(owner_id = ?';
       List<dynamic> whereArgs = [currentUserId];
 
       // Include partnership categories if user has partnership
       if (partnershipId != null) {
-        whereClause = '(owner_id = ? OR owner_id = ?)';
-        whereArgs = [currentUserId, partnershipId!];
+        whereClause += ' OR owner_id = ?';
+        whereArgs.add(partnershipId!);
       }
+
+      whereClause += ')';
 
       if (!includeArchived) {
         whereClause += ' AND is_archived = 0';
@@ -765,14 +772,15 @@ class DataService extends ChangeNotifier {
         orderBy: 'usage_count DESC, name ASC',
       );
 
-      return result.map((map) => _categoryFromMap(map)).toList();
+      final categories = result.map((map) => _categoryFromMap(map)).toList();
+
+      debugPrint('✅ Retrieved ${categories.length} categories');
+      return categories;
     } catch (e) {
       debugPrint('❌ Error getting categories: $e');
       return [];
     }
   }
-
-  // ============ STREAM METHODS FOR UI ============
 
   /// Get transactions stream for real-time updates
   Stream<List<TransactionModel>> getTransactionsStream({
@@ -948,31 +956,6 @@ class DataService extends ChangeNotifier {
 
     await _localDatabase!.update(
       'wallets',
-      {'sync_status': 1, 'firebase_id': recordId},
-      where: 'id = ?',
-      whereArgs: [recordId],
-    );
-  }
-
-  Future<void> _syncCategoryToFirebase(
-    String recordId,
-    String operation,
-    Map<String, dynamic> data,
-  ) async {
-    final categoryRef = _firebaseRef.child('categories').child(recordId);
-
-    switch (operation) {
-      case 'INSERT':
-      case 'UPDATE':
-        await categoryRef.set({...data, 'updatedAt': ServerValue.timestamp});
-        break;
-      case 'DELETE':
-        await categoryRef.remove();
-        break;
-    }
-
-    await _localDatabase!.update(
-      'categories',
       {'sync_status': 1, 'firebase_id': recordId},
       where: 'id = ?',
       whereArgs: [recordId],
@@ -1225,25 +1208,48 @@ class DataService extends ChangeNotifier {
   }
 
   Category _categoryFromMap(Map<String, dynamic> map) {
-    return Category(
-      id: map['id'],
-      name: map['name'],
-      ownerId: map['owner_id'],
-      type: map['type'],
-      iconCodePoint: map['icon_code_point'],
-      subCategories: map['sub_categories'] != null
-          ? Map<String, String>.from(jsonDecode(map['sub_categories']))
-          : {},
-      ownershipType: CategoryOwnershipType.values.firstWhere(
-        (e) => e.name == (map['ownership_type'] ?? 'personal'),
-        orElse: () => CategoryOwnershipType.personal,
-      ),
-      createdBy: map['created_by'],
-      usageCount: map['usage_count'] ?? 0,
-      lastUsed: map['last_used'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['last_used'])
-          : null,
-    );
+    try {
+      return Category(
+        id: map['id']?.toString() ?? '',
+        name: map['name']?.toString() ?? 'Unknown',
+        ownerId: map['owner_id']?.toString() ?? '',
+        type: map['type']?.toString() ?? 'expense',
+        iconCodePoint: map['icon_code_point'] as int?,
+        subCategories: map['sub_categories'] != null
+            ? Map<String, String>.from(jsonDecode(map['sub_categories']))
+            : {},
+        ownershipType: CategoryOwnershipType.values.firstWhere(
+          (e) => e.name == (map['ownership_type']?.toString() ?? 'personal'),
+          orElse: () => CategoryOwnershipType.personal,
+        ),
+        createdBy: map['created_by']?.toString(),
+        isArchived: (map['is_archived'] ?? 0) == 1,
+        usageCount: map['usage_count'] as int? ?? 0,
+        lastUsed: map['last_used'] != null
+            ? DateTime.fromMillisecondsSinceEpoch(map['last_used'])
+            : null,
+        createdAt: map['created_at'] != null
+            ? DateTime.fromMillisecondsSinceEpoch(map['created_at'] * 1000)
+            : DateTime.now(),
+        updatedAt: map['updated_at'] != null
+            ? DateTime.fromMillisecondsSinceEpoch(map['updated_at'] * 1000)
+            : DateTime.now(),
+        version: map['version'] as int? ?? 1,
+      );
+    } catch (e) {
+      debugPrint('❌ Error parsing category from map: $e, map: $map');
+
+      // Return a safe default category
+      return Category(
+        id: map['id']?.toString() ?? 'unknown',
+        name: 'Lỗi danh mục',
+        ownerId: currentUserId ?? '',
+        type: 'expense',
+        ownershipType: CategoryOwnershipType.personal,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+    }
   }
 
   /// Force immediate sync
@@ -1856,9 +1862,15 @@ class DataService extends ChangeNotifier {
     );
   }
 
-  String _getCurrentOwnerId(BudgetType budgetType) {
-    if (budgetType == BudgetType.shared && partnershipId != null) {
-      return partnershipId!;
+  String _getCurrentOwnerId(dynamic type) {
+    if (type is CategoryOwnershipType) {
+      if (type == CategoryOwnershipType.shared && partnershipId != null) {
+        return partnershipId!;
+      }
+    } else if (type is BudgetType) {
+      if (type == BudgetType.shared && partnershipId != null) {
+        return partnershipId!;
+      }
     }
     return currentUserId ?? '';
   }
@@ -2030,46 +2042,264 @@ class DataService extends ChangeNotifier {
     String? ownerId,
   }) async {
     if (!isInitialized || _localDatabase == null) {
-      throw Exception('Service not initialized');
+      throw Exception('DataService chưa được khởi tạo');
+    }
+
+    if (currentUserId == null) {
+      throw Exception('Người dùng chưa đăng nhập');
+    }
+
+    // ✅ VALIDATION: Comprehensive input validation
+    final validationError = _validateCategoryInput(name, type, ownershipType);
+    if (validationError != null) {
+      throw Exception(validationError);
+    }
+
+    // ✅ CHECK DUPLICATES: Check for existing categories
+    final existingCategories = await getCategories();
+    final isDuplicate = existingCategories.any(
+      (c) =>
+          c.name.toLowerCase() == name.trim().toLowerCase() &&
+          c.type == type &&
+          c.ownershipType == ownershipType &&
+          !c.isArchived,
+    );
+
+    if (isDuplicate) {
+      throw Exception('Danh mục "$name" đã tồn tại');
     }
 
     final categoryId =
         'cat_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(9999)}';
-    final finalOwnerId = ownerId ?? _getCurrentOwnerCategoryId(ownershipType);
+    final finalOwnerId = ownerId ?? _getCurrentOwnerId(ownershipType);
 
-    await _localDatabase!.transaction((txn) async {
-      await txn.insert('categories', {
-        'id': categoryId,
-        'name': name.trim(),
-        'owner_id': finalOwnerId,
-        'type': type,
-        'icon_code_point': iconCodePoint,
-        'sub_categories': jsonEncode(subCategories ?? {}),
-        'ownership_type': ownershipType.name,
-        'created_by': currentUserId,
-        'is_archived': 0,
-        'usage_count': 0,
-        'sync_status': 0, // Unsynced
-        'version': 1,
+    try {
+      debugPrint('➕ Adding category: $name (${ownershipType.name})');
+
+      await _localDatabase!.transaction((txn) async {
+        // ✅ INSERT: Add category to local database
+        await txn.insert('categories', {
+          'id': categoryId,
+          'name': name.trim(),
+          'owner_id': finalOwnerId,
+          'type': type,
+          'icon_code_point': iconCodePoint,
+          'sub_categories': jsonEncode(subCategories ?? {}),
+          'ownership_type': ownershipType.name,
+          'created_by': currentUserId,
+          'is_archived': 0,
+          'usage_count': 0,
+          'sync_status': 0, // Unsynced - will be synced later
+          'version': 1,
+          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        });
+
+        // ✅ QUEUE FOR SYNC: Add to sync queue for online sync
+        await _addToSyncQueue(txn, 'categories', categoryId, 'INSERT', {
+          'id': categoryId,
+          'name': name.trim(),
+          'ownerId': finalOwnerId,
+          'type': type,
+          'iconCodePoint': iconCodePoint,
+          'subCategories': subCategories ?? {},
+          'ownershipType': ownershipType.name,
+          'createdBy': currentUserId,
+          'createdAt': DateTime.now().millisecondsSinceEpoch,
+          'updatedAt': DateTime.now().millisecondsSinceEpoch,
+        }, priority: 2);
       });
 
-      await _addToSyncQueue(txn, 'categories', categoryId, 'INSERT', {
-        'name': name.trim(),
-        'ownerId': finalOwnerId,
-        'type': type,
-        'iconCodePoint': iconCodePoint,
-        'subCategories': subCategories ?? {},
-        'ownershipType': ownershipType.name,
-        'createdBy': currentUserId,
-      }, priority: 2);
-    });
+      // ✅ IMMEDIATE SYNC: Try to sync immediately if online
+      if (isOnline) {
+        unawaited(_syncSingleRecord('categories', categoryId));
+      }
 
-    if (isOnline) {
-      unawaited(_syncSingleRecord('categories', categoryId));
+      notifyListeners();
+      debugPrint('✅ Category added successfully: $name');
+    } catch (e) {
+      debugPrint('❌ Error adding category: $e');
+      rethrow;
+    }
+  }
+
+  String? _validateCategoryInput(
+    String name,
+    String type,
+    CategoryOwnershipType ownershipType,
+  ) {
+    // Name validation
+    if (name.trim().isEmpty) {
+      return 'Tên danh mục không được để trống';
     }
 
-    notifyListeners();
-    debugPrint('✅ Category added: $name');
+    if (name.trim().length > 50) {
+      return 'Tên danh mục không được dài quá 50 ký tự';
+    }
+
+    // Check for invalid characters
+    if (name.contains(RegExp(r'[<>"/\\|?*]'))) {
+      return 'Tên danh mục chứa ký tự không hợp lệ';
+    }
+
+    // Type validation
+    if (!['income', 'expense'].contains(type)) {
+      return 'Loại danh mục không hợp lệ (phải là income hoặc expense)';
+    }
+
+    // Partnership validation
+    if (ownershipType == CategoryOwnershipType.shared &&
+        (_userProvider?.hasPartner != true)) {
+      return 'Không thể tạo danh mục chung khi chưa có đối tác';
+    }
+
+    return null; // Valid
+  }
+
+  /// ✅ ENHANCED: Sync category to Firebase with conflict resolution
+  Future<void> _syncCategoryToFirebase(
+    String recordId,
+    String operation,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      final categoryRef = _firebaseRef.child('categories').child(recordId);
+
+      switch (operation) {
+        case 'INSERT':
+          // For new categories, just insert
+          await categoryRef.set({
+            ...data,
+            'updatedAt': ServerValue.timestamp,
+            'createdAt': data['createdAt'] ?? ServerValue.timestamp,
+          });
+          debugPrint('✅ Category synced to Firebase: INSERT $recordId');
+          break;
+
+        case 'UPDATE':
+          // ✅ CONFLICT RESOLUTION: Check for version conflicts
+          final snapshot = await categoryRef.get();
+          if (snapshot.exists) {
+            final serverData = snapshot.value as Map<dynamic, dynamic>;
+            final serverVersion = serverData['version'] as int? ?? 1;
+            final localVersion = data['version'] as int? ?? 1;
+
+            if (serverVersion > localVersion) {
+              // Server version is newer - merge or use server version
+              debugPrint('⚠️ Version conflict detected for category $recordId');
+              await _handleCategoryVersionConflict(recordId, data, serverData);
+              return;
+            }
+          }
+
+          await categoryRef.update({
+            ...data,
+            'version': (data['version'] as int? ?? 1) + 1,
+            'updatedAt': ServerValue.timestamp,
+          });
+          debugPrint('✅ Category synced to Firebase: UPDATE $recordId');
+          break;
+
+        case 'DELETE':
+          // Soft delete by archiving
+          await categoryRef.update({
+            'isArchived': true,
+            'archivedAt': ServerValue.timestamp,
+            'updatedAt': ServerValue.timestamp,
+          });
+          debugPrint('✅ Category synced to Firebase: DELETE $recordId');
+          break;
+      }
+
+      // ✅ UPDATE LOCAL STATUS: Mark as synced in local database
+      await _localDatabase!.update(
+        'categories',
+        {
+          'sync_status': 1, // Synced
+          'firebase_id': recordId,
+          'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [recordId],
+      );
+    } catch (e) {
+      debugPrint('❌ Error syncing category to Firebase: $e');
+
+      // Update sync status to indicate error
+      await _localDatabase!.update(
+        'categories',
+        {'sync_status': 3}, // Error status
+        where: 'id = ?',
+        whereArgs: [recordId],
+      );
+
+      rethrow;
+    }
+  }
+
+  Future<void> _handleCategoryVersionConflict(
+    String recordId,
+    Map<String, dynamic> localData,
+    Map<dynamic, dynamic> serverData,
+  ) async {
+    try {
+      debugPrint('🔄 Resolving category version conflict for $recordId');
+
+      // Simple resolution strategy: Use server version and update local
+      final resolvedCategory = Category(
+        id: recordId,
+        name: serverData['name']?.toString() ?? localData['name'],
+        ownerId: serverData['ownerId']?.toString() ?? localData['ownerId'],
+        type: serverData['type']?.toString() ?? localData['type'],
+        iconCodePoint: serverData['iconCodePoint'] as int?,
+        subCategories: Map<String, String>.from(
+          serverData['subCategories'] ?? localData['subCategories'] ?? {},
+        ),
+        ownershipType: CategoryOwnershipType.values.firstWhere(
+          (e) =>
+              e.name ==
+              (serverData['ownershipType'] ?? localData['ownershipType']),
+          orElse: () => CategoryOwnershipType.personal,
+        ),
+        createdBy: serverData['createdBy']?.toString(),
+        isArchived: serverData['isArchived'] == true,
+        usageCount: serverData['usageCount'] as int? ?? 0,
+        lastUsed: serverData['lastUsed'] != null
+            ? DateTime.fromMillisecondsSinceEpoch(serverData['lastUsed'])
+            : null,
+        createdAt: serverData['createdAt'] != null
+            ? DateTime.fromMillisecondsSinceEpoch(serverData['createdAt'])
+            : DateTime.now(),
+        updatedAt: DateTime.now(),
+        version: serverData['version'] as int? ?? 1,
+      );
+
+      // Update local database with resolved version
+      await _localDatabase!.update(
+        'categories',
+        {
+          'name': resolvedCategory.name,
+          'owner_id': resolvedCategory.ownerId,
+          'type': resolvedCategory.type,
+          'icon_code_point': resolvedCategory.iconCodePoint,
+          'sub_categories': jsonEncode(resolvedCategory.subCategories),
+          'ownership_type': resolvedCategory.ownershipType.name,
+          'is_archived': resolvedCategory.isArchived ? 1 : 0,
+          'usage_count': resolvedCategory.usageCount,
+          'last_used': resolvedCategory.lastUsed?.millisecondsSinceEpoch,
+          'sync_status': 1, // Resolved and synced
+          'version': resolvedCategory.version,
+          'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        where: 'id = ?',
+        whereArgs: [recordId],
+      );
+
+      debugPrint('✅ Category conflict resolved: $recordId');
+    } catch (e) {
+      debugPrint('❌ Error resolving category conflict: $e');
+      rethrow;
+    }
   }
 
   /// Update category with offline-first support
@@ -2649,49 +2879,85 @@ class DataService extends ChangeNotifier {
     );
   }
 
-  /// ✅ ENHANCED: Download categories from Firebase
   Future<void> _downloadCategoriesFromFirebase(int? lastSyncTimestamp) async {
     try {
-      Query query = _firebaseRef
-          .child('categories')
-          .orderByChild('ownerId')
-          .equalTo(currentUserId);
+      debugPrint('⬇️ Downloading categories from Firebase...');
 
-      final snapshot = await query.get();
-      if (!snapshot.exists) return;
+      // Query for user's categories
+      final queries = <Future<DataSnapshot>>[];
 
-      final categoriesMap = snapshot.value as Map<dynamic, dynamic>;
+      // Personal categories
+      queries.add(
+        _firebaseRef
+            .child('categories')
+            .orderByChild('ownerId')
+            .equalTo(currentUserId)
+            .get(),
+      );
 
-      await _localDatabase!.transaction((txn) async {
-        for (final entry in categoriesMap.entries) {
-          final firebaseId = entry.key as String;
-          final firebaseData = entry.value as Map<dynamic, dynamic>;
+      // Shared categories if user has partnership
+      if (partnershipId != null) {
+        queries.add(
+          _firebaseRef
+              .child('categories')
+              .orderByChild('ownerId')
+              .equalTo(partnershipId!)
+              .get(),
+        );
+      }
 
-          final localRecords = await txn.query(
-            'categories',
-            where: 'firebase_id = ? OR id = ?',
-            whereArgs: [firebaseId, firebaseData['id']],
-            limit: 1,
-          );
+      final snapshots = await Future.wait(queries);
 
-          if (localRecords.isEmpty) {
-            await _insertCategoryFromFirebase(txn, firebaseId, firebaseData);
-          } else {
-            // Update existing record if Firebase version is newer
-            final localRecord = localRecords.first;
-            final localVersion = localRecord['version'] as int? ?? 1;
-            final firebaseVersion = firebaseData['version'] as int? ?? 1;
+      int insertedCount = 0;
+      int updatedCount = 0;
 
-            if (firebaseVersion > localVersion) {
-              await _updateCategoryFromFirebase(txn, firebaseId, firebaseData);
+      for (final snapshot in snapshots) {
+        if (!snapshot.exists) continue;
+
+        final categoriesMap = snapshot.value as Map<dynamic, dynamic>;
+
+        await _localDatabase!.transaction((txn) async {
+          for (final entry in categoriesMap.entries) {
+            final firebaseId = entry.key as String;
+            final firebaseData = entry.value as Map<dynamic, dynamic>;
+
+            // Check if category already exists locally
+            final localRecords = await txn.query(
+              'categories',
+              where: 'firebase_id = ? OR id = ?',
+              whereArgs: [firebaseId, firebaseData['id'] ?? firebaseId],
+              limit: 1,
+            );
+
+            if (localRecords.isEmpty) {
+              // Insert new category
+              await _insertCategoryFromFirebase(txn, firebaseId, firebaseData);
+              insertedCount++;
+            } else {
+              // Update existing category if server version is newer
+              final localRecord = localRecords.first;
+              final localVersion = localRecord['version'] as int? ?? 1;
+              final firebaseVersion = firebaseData['version'] as int? ?? 1;
+
+              if (firebaseVersion > localVersion) {
+                await _updateCategoryFromFirebase(
+                  txn,
+                  firebaseId,
+                  firebaseData,
+                );
+                updatedCount++;
+              }
             }
           }
-        }
-      });
+        });
+      }
 
-      debugPrint('✅ Downloaded categories from Firebase');
+      debugPrint(
+        '✅ Categories downloaded: $insertedCount inserted, $updatedCount updated',
+      );
     } catch (e) {
-      debugPrint('❌ Error downloading categories: $e');
+      debugPrint('❌ Error downloading categories from Firebase: $e');
+      rethrow;
     }
   }
 

@@ -67,118 +67,6 @@ class CategoryProvider extends ChangeNotifier {
     }
   }
 
-  /// ✅ ENHANCED: Load categories with better error handling
-  Future<void> loadCategories({bool forceRefresh = false}) async {
-    if (!_mounted || (_isLoading && !forceRefresh)) return;
-
-    _setLoading(true);
-    _clearError();
-
-    try {
-      debugPrint('📂 Loading categories from DataService...');
-
-      final loadedCategories = await _dataService.getCategories(
-        includeArchived: _includeArchived,
-      );
-
-      if (!_mounted) return;
-
-      _categories = loadedCategories;
-      _updateCache();
-      _sortCategories();
-
-      debugPrint('✅ Loaded ${_categories.length} categories');
-    } catch (e) {
-      if (!_mounted) return;
-      _setError('Không thể tải danh mục: $e');
-      debugPrint('❌ Error loading categories: $e');
-    } finally {
-      if (_mounted) {
-        _setLoading(false);
-      }
-    }
-  }
-
-  /// ✅ ENHANCED: Add category with comprehensive validation
-  Future<bool> addCategory({
-    required String name,
-    required String type,
-    required CategoryOwnershipType ownershipType,
-    int? iconCodePoint,
-    Map<String, String>? subCategories,
-    String? ownerId,
-  }) async {
-    if (!_mounted) return false;
-
-    _clearError();
-
-    // ✅ ENHANCED: Comprehensive validation
-    final validationError = _validateCategoryInput(name, type, ownershipType);
-    if (validationError != null) {
-      _setError(validationError);
-      return false;
-    }
-
-    // ✅ ENHANCED: Check for duplicate names with better logic
-    if (_isDuplicateName(name, type, ownershipType)) {
-      _setError(
-        'Danh mục "$name" đã tồn tại trong ${ownershipType == CategoryOwnershipType.shared ? "danh mục chung" : "danh mục cá nhân"}',
-      );
-      return false;
-    }
-
-    try {
-      debugPrint('➕ Adding category: $name ($type, ${ownershipType.name})');
-
-      // ✅ ENHANCED: Optimistic update with rollback capability
-      final tempCategory = _createTempCategory(
-        name: name,
-        type: type,
-        ownershipType: ownershipType,
-        iconCodePoint: iconCodePoint,
-        subCategories: subCategories,
-        ownerId: ownerId,
-      );
-
-      // Add to local list immediately for UI responsiveness
-      _categories.add(tempCategory);
-      _updateCache();
-      _sortCategories();
-      notifyListeners();
-
-      try {
-        // Call DataService
-        await _dataService.addCategory(
-          name: name.trim(),
-          type: type,
-          ownershipType: ownershipType,
-          iconCodePoint: iconCodePoint,
-          subCategories: subCategories,
-          ownerId: ownerId,
-        );
-
-        // ✅ ENHANCED: Remove temp and reload real data
-        _categories.removeWhere((c) => c.id == tempCategory.id);
-        await loadCategories(forceRefresh: true);
-
-        debugPrint('✅ Category added successfully');
-        return true;
-      } catch (e) {
-        // ✅ ENHANCED: Rollback optimistic update
-        _categories.removeWhere((c) => c.id == tempCategory.id);
-        _updateCache();
-        _sortCategories();
-        notifyListeners();
-        throw e;
-      }
-    } catch (e) {
-      _setError('Không thể thêm danh mục: $e');
-      debugPrint('❌ Error adding category: $e');
-      return false;
-    }
-  }
-
-  /// ✅ ENHANCED: Update category with validation
   Future<bool> updateCategory(Category category) async {
     if (!_mounted) return false;
 
@@ -472,45 +360,6 @@ class CategoryProvider extends ChangeNotifier {
     });
   }
 
-  String? _validateCategoryInput(
-    String name,
-    String type,
-    CategoryOwnershipType ownershipType,
-  ) {
-    if (name.trim().isEmpty) {
-      return 'Tên danh mục không được để trống';
-    }
-
-    if (name.trim().length > 50) {
-      return 'Tên danh mục không được dài quá 50 ký tự';
-    }
-
-    if (!['income', 'expense'].contains(type)) {
-      return 'Loại danh mục không hợp lệ';
-    }
-
-    if (ownershipType == CategoryOwnershipType.shared &&
-        !_userProvider.hasPartner) {
-      return 'Không thể tạo danh mục chung khi chưa có đối tác';
-    }
-
-    return null;
-  }
-
-  bool _isDuplicateName(
-    String name,
-    String type,
-    CategoryOwnershipType ownershipType,
-  ) {
-    return _categories.any(
-      (c) =>
-          c.name.toLowerCase() == name.trim().toLowerCase() &&
-          c.type == type &&
-          c.ownershipType == ownershipType &&
-          !c.isArchived,
-    );
-  }
-
   Category _createTempCategory({
     required String name,
     required String type,
@@ -558,24 +407,6 @@ class CategoryProvider extends ChangeNotifier {
       debugPrint('❌ Error checking category dependencies: $e');
       return true; // Assume it has dependencies to be safe
     }
-  }
-
-  void _updateCache() {
-    _categoryCache.clear();
-    _categoryTypeCache.clear();
-
-    for (final category in _categories) {
-      _categoryCache[category.id] = category;
-    }
-  }
-
-  List<Category> _getCachedCategoriesByType(String type) {
-    if (!_categoryTypeCache.containsKey(type)) {
-      _categoryTypeCache[type] = activeCategories
-          .where((c) => c.type == type)
-          .toList();
-    }
-    return _categoryTypeCache[type]!;
   }
 
   void _sortCategories() {
@@ -634,10 +465,198 @@ class CategoryProvider extends ChangeNotifier {
     return totalUsage / activeCategories.length;
   }
 
+  Future<bool> addCategory({
+    required String name,
+    required String type,
+    required CategoryOwnershipType ownershipType,
+    int? iconCodePoint,
+    Map<String, String>? subCategories,
+    String? ownerId,
+  }) async {
+    if (!_mounted) return false;
+
+    _clearError();
+
+    try {
+      debugPrint('🔄 CategoryProvider: Starting to add category "$name"');
+
+      // ✅ VALIDATION: Comprehensive validation before proceeding
+      final validationError = _validateCategoryInput(name, type, ownershipType);
+      if (validationError != null) {
+        _setError(validationError);
+        debugPrint('❌ Validation error: $validationError');
+        return false;
+      }
+
+      // ✅ DUPLICATE CHECK: Check for duplicate names
+      if (_isDuplicateName(name, type, ownershipType)) {
+        final errorMsg =
+            'Danh mục "$name" đã tồn tại trong ${ownershipType == CategoryOwnershipType.shared ? "danh mục chung" : "danh mục cá nhân"}';
+        _setError(errorMsg);
+        debugPrint('❌ Duplicate error: $errorMsg');
+        return false;
+      }
+
+      // ✅ SHOW LOADING: Set loading state for UI
+      _setLoading(true);
+
+      debugPrint('➕ Creating category: $name ($type, ${ownershipType.name})');
+
+      // ✅ CALL DATA SERVICE: Use the fixed DataService method
+      await _dataService.addCategory(
+        name: name.trim(),
+        type: type,
+        ownershipType: ownershipType,
+        iconCodePoint: iconCodePoint,
+        subCategories: subCategories,
+        ownerId: ownerId,
+      );
+
+      debugPrint('✅ DataService.addCategory completed successfully');
+
+      // ✅ REFRESH DATA: Reload categories to show the new one
+      await loadCategories(forceRefresh: true);
+
+      debugPrint('✅ Category "$name" added successfully');
+      return true;
+    } catch (e) {
+      final errorMsg = 'Không thể thêm danh mục: $e';
+      _setError(errorMsg);
+      debugPrint('❌ Error adding category: $e');
+      return false;
+    } finally {
+      if (_mounted) {
+        _setLoading(false);
+      }
+    }
+  }
+
+  /// ✅ ENHANCED: Better validation with detailed error messages
+  String? _validateCategoryInput(
+    String name,
+    String type,
+    CategoryOwnershipType ownershipType,
+  ) {
+    // Name validation
+    if (name.trim().isEmpty) {
+      return 'Tên danh mục không được để trống';
+    }
+
+    if (name.trim().length > 50) {
+      return 'Tên danh mục không được dài quá 50 ký tự';
+    }
+
+    if (name.trim().length < 2) {
+      return 'Tên danh mục phải có ít nhất 2 ký tự';
+    }
+
+    // Check for invalid characters
+    if (name.contains(RegExp(r'[<>"/\\|?*]'))) {
+      return 'Tên danh mục chứa ký tự không hợp lệ: < > " / \\ | ? *';
+    }
+
+    // Type validation
+    if (!['income', 'expense'].contains(type)) {
+      return 'Loại danh mục không hợp lệ (phải là thu nhập hoặc chi tiêu)';
+    }
+
+    // Partnership validation
+    if (ownershipType == CategoryOwnershipType.shared &&
+        !_userProvider.hasPartner) {
+      return 'Không thể tạo danh mục chung khi chưa có đối tác';
+    }
+
+    return null; // Valid
+  }
+
+  /// ✅ ENHANCED: Better duplicate checking
+  bool _isDuplicateName(
+    String name,
+    String type,
+    CategoryOwnershipType ownershipType,
+  ) {
+    final normalizedName = name.trim().toLowerCase();
+
+    return _categories.any(
+      (c) =>
+          c.name.toLowerCase() == normalizedName &&
+          c.type == type &&
+          c.ownershipType == ownershipType &&
+          !c.isArchived,
+    );
+  }
+
+  /// ✅ ENHANCED: Load categories with better error handling
+  Future<void> loadCategories({bool forceRefresh = false}) async {
+    if (!_mounted || (_isLoading && !forceRefresh)) return;
+
+    _setLoading(true);
+    _clearError();
+
+    try {
+      debugPrint('📂 Loading categories from DataService...');
+
+      final loadedCategories = await _dataService.getCategories(
+        includeArchived: _includeArchived,
+      );
+
+      if (!_mounted) return;
+
+      _categories = loadedCategories;
+      _updateCache();
+      _sortCategories();
+
+      debugPrint('✅ Loaded ${_categories.length} categories');
+
+      // ✅ VALIDATE DATA: Check for any data integrity issues
+      _validateLoadedCategories();
+    } catch (e) {
+      if (!_mounted) return;
+      _setError('Không thể tải danh mục: $e');
+      debugPrint('❌ Error loading categories: $e');
+    } finally {
+      if (_mounted) {
+        _setLoading(false);
+      }
+    }
+  }
+
+  /// ✅ NEW: Validate loaded categories for data integrity
+  void _validateLoadedCategories() {
+    try {
+      int invalidCount = 0;
+
+      for (final category in _categories) {
+        // Check for required fields
+        if (category.id.isEmpty || category.name.isEmpty) {
+          debugPrint(
+            '⚠️ Invalid category found: ${category.id} - ${category.name}',
+          );
+          invalidCount++;
+          continue;
+        }
+
+        // Check ownership consistency
+        if (category.ownershipType == CategoryOwnershipType.shared &&
+            !_userProvider.hasPartner) {
+          debugPrint('⚠️ Shared category but no partner: ${category.name}');
+          invalidCount++;
+        }
+      }
+
+      if (invalidCount > 0) {
+        debugPrint('⚠️ Found $invalidCount invalid categories');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error validating categories: $e');
+    }
+  }
+
   void _setLoading(bool loading) {
     if (!_mounted || _isLoading == loading) return;
 
     _isLoading = loading;
+    debugPrint('🔄 CategoryProvider loading state: $loading');
     notifyListeners();
   }
 
@@ -645,6 +664,7 @@ class CategoryProvider extends ChangeNotifier {
     if (!_mounted) return;
 
     _error = error;
+    debugPrint('❌ CategoryProvider error: $error');
     notifyListeners();
   }
 
@@ -652,7 +672,64 @@ class CategoryProvider extends ChangeNotifier {
     if (!_mounted || _error == null) return;
 
     _error = null;
+    debugPrint('✅ CategoryProvider error cleared');
     notifyListeners();
+  }
+
+  /// ✅ ENHANCED: Better cache management
+  void _updateCache() {
+    _categoryCache.clear();
+    _categoryTypeCache.clear();
+
+    for (final category in _categories) {
+      _categoryCache[category.id] = category;
+    }
+
+    debugPrint(
+      '🔄 Category cache updated: ${_categoryCache.length} categories',
+    );
+  }
+
+  /// ✅ ENHANCED: Get categories by type with caching
+  List<Category> _getCachedCategoriesByType(String type) {
+    if (!_categoryTypeCache.containsKey(type)) {
+      _categoryTypeCache[type] = activeCategories
+          .where((c) => c.type == type)
+          .toList();
+      debugPrint(
+        '🔄 Cached $type categories: ${_categoryTypeCache[type]!.length}',
+      );
+    }
+    return _categoryTypeCache[type]!;
+  }
+
+  /// ✅ NEW: Force refresh categories (useful for debugging)
+  Future<void> forceRefreshCategories() async {
+    debugPrint('🔄 Force refreshing categories...');
+    _categories.clear();
+    _updateCache();
+    await loadCategories(forceRefresh: true);
+  }
+
+  /// ✅ NEW: Get category creation statistics
+  Map<String, dynamic> getCategoryCreationStats() {
+    final stats = {
+      'total': _categories.length,
+      'personal': _categories
+          .where((c) => c.ownershipType == CategoryOwnershipType.personal)
+          .length,
+      'shared': _categories
+          .where((c) => c.ownershipType == CategoryOwnershipType.shared)
+          .length,
+      'income': _categories.where((c) => c.type == 'income').length,
+      'expense': _categories.where((c) => c.type == 'expense').length,
+      'archived': _categories.where((c) => c.isArchived).length,
+      'unused': _categories.where((c) => c.usageCount == 0).length,
+      'lastUpdated': DateTime.now().toIso8601String(),
+    };
+
+    debugPrint('📊 Category stats: $stats');
+    return stats;
   }
 
   @override

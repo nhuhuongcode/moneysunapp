@@ -1,12 +1,11 @@
 // lib/presentation/screens/_manage_categories_screen.dart
 import 'package:flutter/material.dart';
+import 'package:moneysun/presentation/widgets/category_widgets.dart';
 import 'package:provider/provider.dart';
 import 'package:moneysun/data/models/category_model.dart';
 import 'package:moneysun/data/providers/category_provider.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/providers/connection_status_provider.dart';
-import 'package:moneysun/presentation/widgets/category_ownership_selector.dart';
-import 'package:moneysun/presentation/widgets/enhanced_category_creation.dart';
 import 'package:moneysun/presentation/widgets/connection_status_banner.dart';
 
 class ManageCategoriesScreen extends StatefulWidget {
@@ -1001,7 +1000,7 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
   }
 
   Widget _buildEmptyState(String type, UserProvider userProvider) {
-    return EmptyCategoriessState(
+    return EmptyCategoriesState(
       type: type,
       filterType: _selectedOwnershipFilter,
       userProvider: userProvider,

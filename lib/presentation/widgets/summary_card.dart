@@ -285,11 +285,6 @@ class _EnhancedSummaryCardState extends State<SummaryCard>
               color: Theme.of(context).primaryColor.withOpacity(0.2),
             ),
           ),
-          child: Icon(
-            Icons.account_balance_wallet_rounded,
-            color: Theme.of(context).primaryColor,
-            size: 28,
-          ),
         ),
         const SizedBox(width: 16),
         Expanded(
@@ -311,52 +306,54 @@ class _EnhancedSummaryCardState extends State<SummaryCard>
             ],
           ),
         ),
-        // Sync status indicator
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: connectionStatus.statusColor.withOpacity(0.15),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: connectionStatus.statusColor.withOpacity(0.3),
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (connectionStatus.isSyncing)
-                SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      connectionStatus.statusColor,
-                    ),
-                  ),
-                )
-              else
-                Icon(
-                  connectionStatus.isOnline
-                      ? Icons.cloud_done
-                      : Icons.cloud_off,
-                  size: 12,
-                  color: connectionStatus.statusColor,
-                ),
-              const SizedBox(width: 4),
-              Text(
-                connectionStatus.isOnline ? 'Online' : 'Offline',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: connectionStatus.statusColor,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
       ],
     );
+    // Sync status indicator
+    // Container(
+    //   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    //   decoration: BoxDecoration(
+    //     color: connectionStatus.statusColor.withOpacity(0.15),
+    //     borderRadius: BorderRadius.circular(12),
+    //     border: Border.all(
+    //       color: connectionStatus.statusColor.withOpacity(0.3),
+    //     ),
+    //   ),
+    // child: Row(
+    //   mainAxisSize: MainAxisSize.min,
+    //   children: [
+    //     if (connectionStatus.isSyncing)
+    //       SizedBox(
+    //         width: 12,
+    //         height: 12,
+    //         child: CircularProgressIndicator(
+    //           strokeWidth: 2,
+    //           valueColor: AlwaysStoppedAnimation<Color>(
+    //             connectionStatus.statusColor,
+    //           ),
+    //         ),
+    //       )
+    //     else
+    //       Icon(
+    //         connectionStatus.isOnline
+    //             ? Icons.cloud_done
+    //             : Icons.cloud_off,
+    //         size: 12,
+    //         color: connectionStatus.statusColor,
+    //       ),
+    //     const SizedBox(width: 4),
+    //     Text(
+    //       connectionStatus.isOnline ? 'Online' : 'Offline',
+    //       style: TextStyle(
+    //         fontSize: 10,
+    //         color: connectionStatus.statusColor,
+    //         fontWeight: FontWeight.w600,
+    //       ),
+    //     ),
+    //   ],
+    // ),
+    //   ),
+    // ],
+    // );
   }
 
   Widget _buildMainBalance(WalletProvider walletProvider) {
@@ -464,7 +461,6 @@ class _EnhancedSummaryCardState extends State<SummaryCard>
             'Thu nhập',
             _summaryData!.totalIncome,
             Colors.green,
-            Icons.trending_up,
             currencyFormatter,
           ),
         ),
@@ -475,7 +471,6 @@ class _EnhancedSummaryCardState extends State<SummaryCard>
             'Chi tiêu',
             _summaryData!.totalExpense,
             Colors.red,
-            Icons.trending_down,
             currencyFormatter,
           ),
         ),
@@ -488,7 +483,6 @@ class _EnhancedSummaryCardState extends State<SummaryCard>
     String title,
     double amount,
     Color color,
-    IconData icon,
     NumberFormat formatter,
   ) {
     return Container(
@@ -507,15 +501,8 @@ class _EnhancedSummaryCardState extends State<SummaryCard>
       ),
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: color, size: 24),
-          ),
-          const SizedBox(height: 12),
+
+          
           Text(
             title,
             style: TextStyle(

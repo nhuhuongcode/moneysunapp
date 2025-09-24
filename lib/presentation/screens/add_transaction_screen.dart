@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'package:moneysun/presentation/widgets/category_widgets.dart';
 import 'package:provider/provider.dart';
 
 // Models
@@ -18,7 +19,6 @@ import 'package:moneysun/data/providers/connection_status_provider.dart';
 
 // Widgets
 import 'package:moneysun/presentation/widgets/smart_amount_input.dart';
-import 'package:moneysun/presentation/widgets/enhanced_category_creation.dart';
 
 // Screens
 import 'package:moneysun/presentation/screens/transfer_screen.dart';
@@ -1766,7 +1766,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen>
   ) {
     showDialog(
       context: context,
-      builder: (context) => EnhancedCategoryCreationDialog(
+      builder: (context) => CategoryCreationDialog(
         type: _selectedType == TransactionType.income ? 'income' : 'expense',
         userProvider: userProvider,
         onCreated: (name, ownershipType) {
