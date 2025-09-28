@@ -258,6 +258,121 @@ class WalletProvider extends ChangeNotifier {
     });
   }
 
+  Future<bool> updateWallet(Wallet wallet) async {
+    _clearError();
+
+    try {
+      debugPrint('📝 Updating wallet: ${wallet.name}');
+
+      // Optimistic update
+      final index = _wallets.indexWhere((w) => w.id == wallet.id);
+      if (index != -1) {
+        final oldWallet = _wallets[index];
+        _wallets[index] = wallet;
+        _applyCurrentFilters();
+        notifyListeners();
+
+        try {
+          await _dataService.updateWallet(wallet);
+          debugPrint('✅ Wallet updated successfully');
+          return true;
+        } catch (e) {
+          // Rollback on error
+          _wallets[index] = oldWallet;
+          _applyCurrentFilters();
+          notifyListeners();
+          throw e;
+        }
+      }
+
+      throw Exception('Wallet not found');
+    } catch (e) {
+      _setError('Không thể cập nhật ví: $e');
+      debugPrint('❌ Error updating wallet: $e');
+      return false;
+    }
+  }
+
+  /// Delete wallet
+  Future<bool> deleteWallet(String walletId) async {
+    _clearError();
+
+    try {
+      debugPrint('🗑️ Deleting wallet: $walletId');
+
+      // Check if wallet can be deleted
+      final wallet = getWalletById(walletId);
+      if (wallet == null) {
+        throw Exception('Ví không tồn tại');
+      }
+
+      if (!canEditWallet(wallet)) {
+        throw Exception('Bạn không có quyền xóa ví này');
+      }
+
+      // Optimistic removal
+      final removedWallet = _wallets.firstWhere((w) => w.id == walletId);
+      _wallets.removeWhere((w) => w.id == walletId);
+      _applyCurrentFilters();
+      notifyListeners();
+
+      try {
+        await _dataService.deleteWallet(walletId);
+        debugPrint('✅ Wallet deleted successfully');
+        return true;
+      } catch (e) {
+        // Rollback on error
+        _wallets.add(removedWallet);
+        _applyCurrentFilters();
+        notifyListeners();
+        throw e;
+      }
+    } catch (e) {
+      _setError('Không thể xóa ví: $e');
+      debugPrint('❌ Error deleting wallet: $e');
+      return false;
+    }
+  }
+
+  /// Archive wallet
+  Future<bool> archiveWallet(String walletId) async {
+    _clearError();
+
+    try {
+      final wallet = getWalletById(walletId);
+      if (wallet == null) {
+        throw Exception('Ví không tồn tại');
+      }
+
+      await _dataService.archiveWallet(walletId);
+      await loadWallets(forceRefresh: true);
+
+      debugPrint('✅ Wallet archived successfully');
+      return true;
+    } catch (e) {
+      _setError('Không thể lưu trữ ví: $e');
+      debugPrint('❌ Error archiving wallet: $e');
+      return false;
+    }
+  }
+
+  /// Restore archived wallet
+  Future<bool> restoreWallet(String walletId) async {
+    _clearError();
+
+    try {
+      await _dataService.restoreWallet(walletId);
+      await loadWallets(forceRefresh: true);
+
+      debugPrint('✅ Wallet restored successfully');
+      return true;
+    } catch (e) {
+      _setError('Không thể khôi phục ví: $e');
+      debugPrint('❌ Error restoring wallet: $e');
+      return false;
+    }
+  }
+
   void _setLoading(bool loading) {
     if (_isLoading != loading) {
       _isLoading = loading;

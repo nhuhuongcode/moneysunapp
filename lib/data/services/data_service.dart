@@ -4765,6 +4765,214 @@ class DataService extends ChangeNotifier {
     }
   }
 
+  Future<void> updateWallet(Wallet wallet) async {
+    if (!_isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    try {
+      debugPrint('📝 Updating wallet: ${wallet.name}');
+
+      await _localDatabase!.transaction((txn) async {
+        // Update wallet in local database
+        await txn.update(
+          'wallets',
+          {
+            'name': wallet.name,
+            'balance': wallet.balance,
+            'is_visible_to_partner': wallet.isVisibleToPartner ? 1 : 0,
+            'wallet_type': wallet.type.name,
+            'is_archived': wallet.isArchived ? 1 : 0,
+            'sync_status': 0, // Mark as unsynced
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'id = ?',
+          whereArgs: [wallet.id],
+        );
+
+        // Add to sync queue for online sync
+        await _addToSyncQueue(
+          txn,
+          'wallets',
+          wallet.id,
+          'UPDATE',
+          wallet.toJson(),
+          priority: 2,
+        );
+      });
+
+      // Try immediate sync if online
+      if (_isOnline) {
+        unawaited(_syncSingleRecord('wallets', wallet.id));
+      }
+
+      notifyListeners();
+      debugPrint('✅ Wallet updated successfully');
+    } catch (e) {
+      debugPrint('❌ Error updating wallet: $e');
+      rethrow;
+    }
+  }
+
+  /// Delete wallet with offline-first support (soft delete)
+  Future<void> deleteWallet(String walletId) async {
+    if (!_isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    try {
+      debugPrint('🗑️ Deleting wallet: $walletId');
+
+      // Check if wallet has transactions
+      final hasTransactions = await _checkWalletHasTransactions(walletId);
+      if (hasTransactions) {
+        throw Exception(
+          'Không thể xóa ví đang có giao dịch. Vui lòng chuyển hoặc xóa các giao dịch trước.',
+        );
+      }
+
+      await _localDatabase!.transaction((txn) async {
+        // Soft delete by archiving
+        await txn.update(
+          'wallets',
+          {
+            'is_archived': 1,
+            'sync_status': 0,
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'id = ?',
+          whereArgs: [walletId],
+        );
+
+        // Add to sync queue
+        await _addToSyncQueue(txn, 'wallets', walletId, 'DELETE', {
+          'id': walletId,
+        }, priority: 2);
+      });
+
+      // Try immediate sync if online
+      if (_isOnline) {
+        unawaited(_syncSingleRecord('wallets', walletId));
+      }
+
+      notifyListeners();
+      debugPrint('✅ Wallet deleted successfully');
+    } catch (e) {
+      debugPrint('❌ Error deleting wallet: $e');
+      rethrow;
+    }
+  }
+
+  /// Check if wallet has transactions
+  Future<bool> _checkWalletHasTransactions(String walletId) async {
+    try {
+      final result = await _localDatabase!.query(
+        'transactions',
+        where: 'wallet_id = ? OR transfer_to_wallet_id = ?',
+        whereArgs: [walletId, walletId],
+        limit: 1,
+      );
+      return result.isNotEmpty;
+    } catch (e) {
+      debugPrint('❌ Error checking wallet transactions: $e');
+      return true; // Assume has transactions to be safe
+    }
+  }
+
+  /// Archive wallet
+  Future<void> archiveWallet(String walletId) async {
+    if (!_isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    try {
+      await _localDatabase!.transaction((txn) async {
+        await txn.update(
+          'wallets',
+          {
+            'is_archived': 1,
+            'sync_status': 0,
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'id = ?',
+          whereArgs: [walletId],
+        );
+
+        await _addToSyncQueue(txn, 'wallets', walletId, 'UPDATE', {
+          'isArchived': true,
+        }, priority: 3);
+      });
+
+      if (_isOnline) {
+        unawaited(_syncSingleRecord('wallets', walletId));
+      }
+
+      notifyListeners();
+      debugPrint('✅ Wallet archived successfully');
+    } catch (e) {
+      debugPrint('❌ Error archiving wallet: $e');
+      rethrow;
+    }
+  }
+
+  /// Restore archived wallet
+  Future<void> restoreWallet(String walletId) async {
+    if (!_isInitialized || _localDatabase == null) {
+      throw Exception('Service not initialized');
+    }
+
+    try {
+      await _localDatabase!.transaction((txn) async {
+        await txn.update(
+          'wallets',
+          {
+            'is_archived': 0,
+            'sync_status': 0,
+            'updated_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          },
+          where: 'id = ?',
+          whereArgs: [walletId],
+        );
+
+        await _addToSyncQueue(txn, 'wallets', walletId, 'UPDATE', {
+          'isArchived': false,
+        }, priority: 3);
+      });
+
+      if (_isOnline) {
+        unawaited(_syncSingleRecord('wallets', walletId));
+      }
+
+      notifyListeners();
+      debugPrint('✅ Wallet restored successfully');
+    } catch (e) {
+      debugPrint('❌ Error restoring wallet: $e');
+      rethrow;
+    }
+  }
+
+  /// Get wallet by ID
+  Future<Wallet?> getWalletById(String walletId) async {
+    if (!_isInitialized || _localDatabase == null) return null;
+
+    try {
+      final result = await _localDatabase!.query(
+        'wallets',
+        where: 'id = ?',
+        whereArgs: [walletId],
+        limit: 1,
+      );
+
+      if (result.isNotEmpty) {
+        return _walletFromMap(result.first);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('❌ Error getting wallet by ID: $e');
+      return null;
+    }
+  }
+
   @override
   void dispose() {
     _connectivitySubscription?.cancel();

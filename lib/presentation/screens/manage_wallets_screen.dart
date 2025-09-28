@@ -1107,7 +1107,440 @@ class _ManageWalletsScreenState extends State<ManageWalletsScreen>
   }
 
   void _handleWalletAction(String action, Wallet wallet) {
-    // Implementation for wallet actions
+    switch (action) {
+      case 'edit':
+        _showEditWalletDialog(wallet);
+        break;
+      case 'delete':
+        _showDeleteWalletDialog(wallet);
+        break;
+      case 'view':
+        _showWalletDetailsDialog(wallet);
+        break;
+    }
+  }
+
+  void _showEditWalletDialog(Wallet wallet) {
+    final nameController = TextEditingController(text: wallet.name);
+    final balanceController = TextEditingController(
+      text: NumberFormat.decimalPattern('vi_VN').format(wallet.balance),
+    );
+    bool isVisibleToPartner = wallet.isVisibleToPartner;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Dialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                constraints: const BoxConstraints(maxWidth: 500),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: const Icon(
+                            Icons.edit_rounded,
+                            color: Colors.orange,
+                            size: 24,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Chỉnh sửa ví',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                'Ví: ${wallet.name}',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // Wallet Name
+                    TextField(
+                      controller: nameController,
+                      decoration: InputDecoration(
+                        labelText: 'Tên ví *',
+                        prefixIcon: const Icon(Icons.wallet_rounded),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      textCapitalization: TextCapitalization.words,
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // Balance (read-only or editable based on business logic)
+                    SmartAmountInput(
+                      controller: balanceController,
+                      labelText: 'Số dư hiện tại',
+                      hintText: 'Nhập số dư...',
+                      showQuickButtons: true,
+                      enabled:
+                          false, // Usually balance should not be directly edited
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.attach_money_rounded),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        filled: true,
+                        fillColor: Colors.grey.withOpacity(0.05),
+                      ),
+                    ),
+
+                    // Visibility to partner
+                    if (context.read<UserProvider>().hasPartner &&
+                        wallet.ownerId ==
+                            context.read<UserProvider>().currentUser?.uid) ...[
+                      const SizedBox(height: 20),
+                      SwitchListTile(
+                        title: const Text('Hiển thị với đối tác'),
+                        subtitle: Text(
+                          isVisibleToPartner
+                              ? 'Đối tác có thể thấy ví này'
+                              : 'Chỉ bạn thấy ví này',
+                        ),
+                        value: isVisibleToPartner,
+                        onChanged: (value) {
+                          setDialogState(() => isVisibleToPartner = value);
+                        },
+                        activeColor: Colors.blue,
+                      ),
+                    ],
+
+                    const SizedBox(height: 24),
+
+                    // Action Buttons
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(context),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text('Hủy'),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () async {
+                              final name = nameController.text.trim();
+                              if (name.isEmpty) {
+                                _showErrorSnackBar('Vui lòng nhập tên ví');
+                                return;
+                              }
+
+                              Navigator.pop(context);
+
+                              // Create updated wallet
+                              final updatedWallet = wallet.copyWith(
+                                name: name,
+                                isVisibleToPartner: isVisibleToPartner,
+                              );
+
+                              // Update wallet
+                              final success = await context
+                                  .read<WalletProvider>()
+                                  .updateWallet(updatedWallet);
+
+                              if (success) {
+                                _showSuccessSnackBar('Đã cập nhật ví "$name"');
+                              } else {
+                                _showErrorSnackBar('Không thể cập nhật ví');
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text(
+                              'Lưu thay đổi',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Show delete wallet confirmation dialog
+  void _showDeleteWalletDialog(Wallet wallet) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.delete_rounded,
+                  color: Colors.red,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Text('Xác nhận xóa ví'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Bạn có chắc muốn xóa ví "${wallet.name}"?',
+                style: const TextStyle(fontSize: 16),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.warning_rounded,
+                      color: Colors.orange.shade700,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Lưu ý: Ví phải không có giao dịch mới có thể xóa.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.orange.shade700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Số dư hiện tại: ${NumberFormat.currency(locale: 'vi_VN', symbol: '₫').format(wallet.balance)}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+
+                // Delete wallet
+                final success = await context
+                    .read<WalletProvider>()
+                    .deleteWallet(wallet.id);
+
+                if (success) {
+                  _showSuccessSnackBar('Đã xóa ví "${wallet.name}"');
+                } else {
+                  _showErrorSnackBar(
+                    context.read<WalletProvider>().error ??
+                        'Không thể xóa ví. Vui lòng kiểm tra lại.',
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Xóa ví'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Show wallet details dialog (read-only)
+  void _showWalletDetailsDialog(Wallet wallet) {
+    final walletConfig = _getWalletConfig(wallet, context.read<UserProvider>());
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Icon and title
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: walletConfig.color.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    walletConfig.icon,
+                    color: walletConfig.color,
+                    size: 40,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  wallet.name,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: walletConfig.color.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    walletConfig.label,
+                    style: TextStyle(
+                      color: walletConfig.color,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Balance
+                Text(
+                  NumberFormat.currency(
+                    locale: 'vi_VN',
+                    symbol: '₫',
+                  ).format(wallet.balance),
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: walletConfig.color,
+                  ),
+                ),
+                const Text(
+                  'Số dư hiện tại',
+                  style: TextStyle(color: Colors.grey),
+                ),
+
+                const SizedBox(height: 24),
+
+                // Additional info
+                _buildInfoRow('Loại ví', wallet.type.displayName),
+                _buildInfoRow(
+                  'Hiển thị với đối tác',
+                  wallet.isVisibleToPartner ? 'Có' : 'Không',
+                ),
+                _buildInfoRow(
+                  'Trạng thái',
+                  wallet.isArchived ? 'Đã lưu trữ' : 'Đang hoạt động',
+                ),
+
+                const SizedBox(height: 24),
+
+                // Close button
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text('Đóng'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.grey)),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
   }
 
   void _showSyncStatusDialog() {

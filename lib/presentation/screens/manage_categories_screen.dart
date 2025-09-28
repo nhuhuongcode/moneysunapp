@@ -1112,9 +1112,7 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
     // Implementation for category detail dialog
   }
 
-  void _showEditCategoryDialog(Category category) {
-    // Implementation for edit category dialog
-  }
+  void _showEditCategoryDialog(Category category) {}
 
   void _showAddSubCategoryDialog(Category category) {
     // Implementation for add sub-category dialog
