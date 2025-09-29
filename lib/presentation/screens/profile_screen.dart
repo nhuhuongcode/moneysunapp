@@ -2113,7 +2113,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
-  /// ✅ NEW: Execute the actual data deletion
   Future<void> _executeDeleteAllData() async {
     setState(() => _isDeletingData = true);
 
@@ -2138,12 +2137,12 @@ class _ProfileScreenState extends State<ProfileScreen>
           await _partnershipService.disconnectPartnership(userProvider);
           await Future.delayed(const Duration(milliseconds: 500));
         } catch (e) {
-          debugPrint('Warning: Failed to disconnect partnership: $e');
+          debugPrint('⚠️ Warning: Failed to disconnect partnership: $e');
           // Continue with deletion even if partnership disconnect fails
         }
       }
 
-      // Step 2: Use DataService to delete all data
+      // Step 2: ✅ ENHANCED: Use enhanced DataService deletion
       _updateDeletionProgress('Bắt đầu xóa tất cả dữ liệu...', 0.1);
 
       final success = await dataService.deleteAllUserData(
@@ -2156,16 +2155,8 @@ class _ProfileScreenState extends State<ProfileScreen>
         throw Exception('Data deletion failed');
       }
 
-      // Step 3: Reset DataService state
-      _updateDeletionProgress('Reset service state...', 0.95);
-      await dataService.resetDataServiceState();
-
-      // Step 4: Clear provider states
-      _updateDeletionProgress('Dọn dẹp providers...', 0.97);
-      await _clearAllProviders();
-
-      // Step 5: Verify deletion completed
-      _updateDeletionProgress('Kiểm tra hoàn tất...', 0.99);
+      // Step 3: Verify deletion completed (including categories)
+      _updateDeletionProgress('Kiểm tra hoàn tất...', 0.96);
       final isComplete = await dataService.verifyDeletionComplete(
         userId,
         partnershipId,
@@ -2174,7 +2165,27 @@ class _ProfileScreenState extends State<ProfileScreen>
       if (!isComplete) {
         debugPrint('⚠️ Some data may remain, attempting nuclear option...');
         await dataService.forceNukeLocalDatabase();
+
+        // Verify again after nuclear option
+        final isCompleteAfterNuke = await dataService.verifyDeletionComplete(
+          userId,
+          partnershipId,
+        );
+
+        if (!isCompleteAfterNuke) {
+          throw Exception(
+            'Failed to complete deletion even after nuclear option',
+          );
+        }
       }
+
+      // Step 4: Reset DataService state
+      _updateDeletionProgress('Reset service state...', 0.98);
+      await dataService.resetDataServiceState();
+
+      // Step 5: Clear provider states
+      _updateDeletionProgress('Dọn dẹp providers...', 0.99);
+      await _clearAllProviders();
 
       // Step 6: Complete
       _updateDeletionProgress('Hoàn tất!', 1.0);
@@ -2185,13 +2196,8 @@ class _ProfileScreenState extends State<ProfileScreen>
         Navigator.of(context).pop();
       }
 
-      // Show success message and sign out
-      _showSuccessSnackBar('Đã xóa tất cả dữ liệu thành công!');
-
-      // Sign out after a short delay
-      Future.delayed(const Duration(seconds: 2), () async {
-        await _authService.signOut();
-      });
+      // ✅ Show detailed success message
+      _showDetailedSuccessDialog();
     } catch (e) {
       // Hide progress dialog if showing
       if (Navigator.canPop(context)) {
@@ -2210,7 +2216,106 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
   }
 
-  /// ✅ NEW: Show recovery information if deletion fails
+  /// ✅ NEW: Show detailed success dialog
+  void _showDetailedSuccessDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.check_circle,
+                color: Colors.green,
+                size: 32,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Xóa hoàn tất!',
+                style: TextStyle(color: Colors.green),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Đã xóa thành công tất cả dữ liệu bao gồm:',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            _buildSuccessItem('✅ Tất cả giao dịch'),
+            _buildSuccessItem('✅ Tất cả ví và tài khoản'),
+            _buildSuccessItem('✅ Tất cả danh mục'),
+            _buildSuccessItem('✅ Tất cả ngân sách'),
+            _buildSuccessItem('✅ Dữ liệu cả online và offline'),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info, color: Colors.blue, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Bạn sẽ được đăng xuất trong 3 giây',
+                      style: TextStyle(
+                        color: Colors.blue.shade700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await _authService.signOut();
+            },
+            child: const Text('Đăng xuất ngay'),
+          ),
+        ],
+      ),
+    );
+
+    // Auto sign out after 3 seconds
+    Future.delayed(const Duration(seconds: 3), () async {
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+      await _authService.signOut();
+    });
+  }
+
+  Widget _buildSuccessItem(String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 13, color: Colors.green.shade700),
+      ),
+    );
+  }
+
   Future<void> _showRecoveryInfo() async {
     try {
       final dataService = Provider.of<DataService>(context, listen: false);

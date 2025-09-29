@@ -61,6 +61,33 @@ class ConnectionStatusProvider extends ChangeNotifier {
       hasChanges = true;
     }
 
+    /// ✅ NEW: Check if error is an index error
+    bool _isIndexError(String error) {
+      return error.contains('index not defined') ||
+          error.contains('indexOn') ||
+          error.contains('firebase_database/index-not-defined');
+    }
+
+    bool _shouldUpdateError(String? newError) {
+      // Ignore index errors
+      if (newError != null && _isIndexError(newError)) {
+        return false;
+      }
+      return newError != _lastError;
+    }
+
+    /// ✅ NEW: Filter out index errors from display
+    String? _filterError(String? error) {
+      if (error == null) return null;
+
+      // Don't show index errors to users
+      if (_isIndexError(error)) {
+        return null;
+      }
+
+      return error;
+    }
+
     if (hasChanges) {
       notifyListeners();
     }

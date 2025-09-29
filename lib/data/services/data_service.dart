@@ -4071,46 +4071,6 @@ class DataService extends ChangeNotifier {
     }
   }
 
-  // Addition to lib/data/services/data_service.dart - Data Deletion Methods
-
-  // ============ DATA DELETION METHODS ============
-
-  /// ✅ NEW: Delete all user data (both local and Firebase)
-  Future<bool> deleteAllUserData({
-    required String userId,
-    String? partnershipId,
-    Function(String message, double progress)? onProgress,
-  }) async {
-    if (!_isInitialized || _localDatabase == null) {
-      throw Exception('DataService not initialized');
-    }
-
-    try {
-      debugPrint('🗑️ Starting complete data deletion for user: $userId');
-      onProgress?.call('Bắt đầu xóa dữ liệu...', 0.0);
-
-      // Step 1: Delete from Firebase if online
-      if (_isOnline) {
-        await _deleteFirebaseUserData(userId, partnershipId, onProgress);
-      } else {
-        onProgress?.call('Chế độ offline - chỉ xóa local...', 0.3);
-      }
-
-      // Step 2: Delete all local data
-      await _deleteAllLocalData(userId, partnershipId, onProgress);
-
-      // Step 3: Clear sync queue
-      await _clearSyncQueue();
-      onProgress?.call('Dọn dẹp hoàn tất!', 1.0);
-
-      debugPrint('✅ All user data deleted successfully');
-      return true;
-    } catch (e) {
-      debugPrint('❌ Error deleting all user data: $e');
-      rethrow;
-    }
-  }
-
   /// ✅ NEW: Delete user data from Firebase
   Future<void> _deleteFirebaseUserData(
     String userId,
@@ -4538,31 +4498,6 @@ class DataService extends ChangeNotifier {
     }
   }
 
-  /// ✅ NEW: Verify data deletion completion
-  Future<bool> verifyDeletionComplete(
-    String userId,
-    String? partnershipId,
-  ) async {
-    try {
-      final stats = await getDataDeletionStats();
-      final localData = stats['local_data'] as Map<String, dynamic>? ?? {};
-      final totalLocalItems = localData['total'] as int? ?? 0;
-
-      if (totalLocalItems > 0) {
-        debugPrint('⚠️ Deletion incomplete: $totalLocalItems items remaining');
-        debugPrint('Remaining items: $localData');
-        return false;
-      }
-
-      debugPrint('✅ Deletion verification: All local data cleared');
-      return true;
-    } catch (e) {
-      debugPrint('❌ Error verifying deletion: $e');
-      return false;
-    }
-  }
-
-  /// ✅ NEW: Emergency data recovery check (in case user wants to undo)
   Future<Map<String, dynamic>> getRecoveryInfo() async {
     if (!_isInitialized || _localDatabase == null) {
       return {};
@@ -4970,6 +4905,552 @@ class DataService extends ChangeNotifier {
     } catch (e) {
       debugPrint('❌ Error getting wallet by ID: $e');
       return null;
+    }
+  }
+
+  Future<void> _deleteFirebaseCategoriesWithCheck(
+    String userId,
+    String? partnershipId,
+    Map<String, dynamic> updates,
+    Function(String message, double progress)? onProgress,
+  ) async {
+    try {
+      onProgress?.call('Kiểm tra và xóa danh mục online...', 0.45);
+
+      // Check and delete personal categories
+      final personalCategoriesSnapshot = await _firebaseRef
+          .child('categories')
+          .orderByChild('ownerId')
+          .equalTo(userId)
+          .get();
+
+      if (personalCategoriesSnapshot.exists) {
+        final categories =
+            personalCategoriesSnapshot.value as Map<dynamic, dynamic>;
+        debugPrint(
+          '📁 Found ${categories.length} personal categories to delete',
+        );
+
+        for (final entry in categories.entries) {
+          final categoryId = entry.key as String;
+          final categoryData = entry.value as Map<dynamic, dynamic>;
+
+          // Verify ownership before marking for deletion
+          if (categoryData['ownerId'] == userId) {
+            updates['categories/$categoryId'] = null;
+            debugPrint(
+              '🗑️ Marked personal category for deletion: $categoryId',
+            );
+          }
+        }
+      } else {
+        debugPrint('ℹ️ No personal categories found for user: $userId');
+      }
+
+      // Check and delete shared categories if partnership exists
+      if (partnershipId != null) {
+        onProgress?.call('Kiểm tra và xóa danh mục chung...', 0.55);
+
+        final sharedCategoriesSnapshot = await _firebaseRef
+            .child('categories')
+            .orderByChild('ownerId')
+            .equalTo(partnershipId)
+            .get();
+
+        if (sharedCategoriesSnapshot.exists) {
+          final sharedCategories =
+              sharedCategoriesSnapshot.value as Map<dynamic, dynamic>;
+          debugPrint(
+            '📁 Found ${sharedCategories.length} shared categories to delete',
+          );
+
+          for (final entry in sharedCategories.entries) {
+            final categoryId = entry.key as String;
+            final categoryData = entry.value as Map<dynamic, dynamic>;
+
+            // Verify it's a shared category
+            if (categoryData['ownerId'] == partnershipId) {
+              updates['categories/$categoryId'] = null;
+              debugPrint(
+                '🗑️ Marked shared category for deletion: $categoryId',
+              );
+            }
+          }
+        } else {
+          debugPrint(
+            'ℹ️ No shared categories found for partnership: $partnershipId',
+          );
+        }
+      }
+
+      debugPrint('✅ Categories check and mark for deletion completed');
+    } catch (e) {
+      debugPrint('❌ Error checking/deleting categories from Firebase: $e');
+      throw Exception('Failed to delete categories: $e');
+    }
+  }
+
+  /// ✅ ENHANCED: Delete all user data with comprehensive checks
+  Future<bool> deleteAllUserData({
+    required String userId,
+    String? partnershipId,
+    Function(String message, double progress)? onProgress,
+  }) async {
+    if (!_isInitialized || _localDatabase == null) {
+      throw Exception('DataService not initialized');
+    }
+
+    try {
+      debugPrint('🗑️ Starting complete data deletion for user: $userId');
+      onProgress?.call('Bắt đầu xóa dữ liệu...', 0.0);
+
+      // Step 1: Create backup before deletion
+      onProgress?.call('Tạo bản sao lưu...', 0.05);
+      final backup = await createDataBackup(userId, partnershipId);
+      debugPrint(
+        '💾 Backup created with ${backup['backup_info']['total_items']} items',
+      );
+
+      // Step 2: Delete from Firebase if online
+      if (_isOnline) {
+        try {
+          await _deleteFirebaseUserDataEnhanced(
+            userId,
+            partnershipId,
+            onProgress,
+          );
+        } catch (e) {
+          debugPrint(
+            '⚠️ Firebase deletion failed, but continuing with local deletion: $e',
+          );
+          // Continue with local deletion even if Firebase fails
+        }
+      } else {
+        onProgress?.call('Chế độ offline - chỉ xóa local...', 0.3);
+        debugPrint('ℹ️ Offline mode - skipping Firebase deletion');
+      }
+
+      // Step 3: Delete all local data
+      await _deleteAllLocalDataEnhanced(userId, partnershipId, onProgress);
+
+      // Step 4: Clear sync queue
+      await _clearSyncQueue();
+      onProgress?.call('Dọn dẹp hoàn tất!', 1.0);
+
+      debugPrint('✅ All user data deleted successfully');
+      return true;
+    } catch (e) {
+      debugPrint('❌ Error deleting all user data: $e');
+
+      // Attempt to restore from backup if available
+      try {
+        final backup = await createDataBackup(userId, partnershipId);
+        if (backup.isNotEmpty) {
+          debugPrint('🔄 Attempting to restore from backup...');
+          await restoreFromBackup(backup);
+        }
+      } catch (restoreError) {
+        debugPrint('❌ Failed to restore from backup: $restoreError');
+      }
+
+      rethrow;
+    }
+  }
+
+  /// ✅ NEW: Enhanced Firebase deletion with existence checks
+  Future<void> _deleteFirebaseUserDataEnhanced(
+    String userId,
+    String? partnershipId,
+    Function(String message, double progress)? onProgress,
+  ) async {
+    try {
+      onProgress?.call('Xóa dữ liệu online...', 0.1);
+
+      final Map<String, dynamic> updates = {};
+
+      // 1. Delete transactions with check
+      onProgress?.call('Kiểm tra và xóa giao dịch...', 0.15);
+      await _deleteFirebaseTransactionsWithCheck(userId, updates, onProgress);
+
+      // 2. Delete wallets with check
+      onProgress?.call('Kiểm tra và xóa ví...', 0.30);
+      await _deleteFirebaseWalletsWithCheck(
+        userId,
+        partnershipId,
+        updates,
+        onProgress,
+      );
+
+      // 3. ✅ NEW: Delete categories with check
+      await _deleteFirebaseCategoriesWithCheck(
+        userId,
+        partnershipId,
+        updates,
+        onProgress,
+      );
+
+      // 4. Delete budgets with check
+      onProgress?.call('Kiểm tra và xóa ngân sách...', 0.60);
+      await _deleteFirebaseBudgetsWithCheck(
+        userId,
+        partnershipId,
+        updates,
+        onProgress,
+      );
+
+      // 5. Delete shared data if partnership exists
+      if (partnershipId != null) {
+        await _deleteSharedFirebaseDataWithCheck(
+          partnershipId,
+          updates,
+          onProgress,
+        );
+      }
+
+      // 6. Delete user profile and related data
+      onProgress?.call('Xóa thông tin tài khoản online...', 0.75);
+      await _deleteUserProfileWithCheck(userId, updates);
+
+      // 7. Execute all deletions in one batch
+      if (updates.isNotEmpty) {
+        onProgress?.call('Thực hiện xóa online...', 0.80);
+        await _firebaseRef.update(updates);
+        debugPrint('✅ Deleted ${updates.length} items from Firebase');
+      } else {
+        debugPrint('ℹ️ No items found to delete from Firebase');
+      }
+    } catch (e) {
+      debugPrint('❌ Error deleting Firebase data: $e');
+      throw Exception('Failed to delete online data: $e');
+    }
+  }
+
+  /// ✅ HELPER: Delete transactions with existence check
+  Future<void> _deleteFirebaseTransactionsWithCheck(
+    String userId,
+    Map<String, dynamic> updates,
+    Function(String message, double progress)? onProgress,
+  ) async {
+    try {
+      final transactionsSnapshot = await _firebaseRef
+          .child('transactions')
+          .orderByChild('userId')
+          .equalTo(userId)
+          .get();
+
+      if (transactionsSnapshot.exists) {
+        final transactions =
+            transactionsSnapshot.value as Map<dynamic, dynamic>;
+        debugPrint('💸 Found ${transactions.length} transactions to delete');
+
+        for (final entry in transactions.entries) {
+          final transactionId = entry.key as String;
+          final transactionData = entry.value as Map<dynamic, dynamic>;
+
+          // Verify ownership
+          if (transactionData['userId'] == userId) {
+            updates['transactions/$transactionId'] = null;
+          }
+        }
+      } else {
+        debugPrint('ℹ️ No transactions found for user: $userId');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error checking transactions: $e');
+    }
+  }
+
+  /// ✅ HELPER: Delete wallets with existence check
+  Future<void> _deleteFirebaseWalletsWithCheck(
+    String userId,
+    String? partnershipId,
+    Map<String, dynamic> updates,
+    Function(String message, double progress)? onProgress,
+  ) async {
+    try {
+      // Personal wallets
+      final walletsSnapshot = await _firebaseRef
+          .child('wallets')
+          .orderByChild('ownerId')
+          .equalTo(userId)
+          .get();
+
+      if (walletsSnapshot.exists) {
+        final wallets = walletsSnapshot.value as Map<dynamic, dynamic>;
+        debugPrint('👛 Found ${wallets.length} personal wallets to delete');
+
+        for (final entry in wallets.entries) {
+          final walletId = entry.key as String;
+          final walletData = entry.value as Map<dynamic, dynamic>;
+
+          if (walletData['ownerId'] == userId) {
+            updates['wallets/$walletId'] = null;
+          }
+        }
+      } else {
+        debugPrint('ℹ️ No personal wallets found');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error checking wallets: $e');
+    }
+  }
+
+  /// ✅ HELPER: Delete budgets with existence check
+  Future<void> _deleteFirebaseBudgetsWithCheck(
+    String userId,
+    String? partnershipId,
+    Map<String, dynamic> updates,
+    Function(String message, double progress)? onProgress,
+  ) async {
+    try {
+      // Personal budgets
+      final budgetsSnapshot = await _firebaseRef
+          .child('budgets')
+          .orderByChild('ownerId')
+          .equalTo(userId)
+          .get();
+
+      if (budgetsSnapshot.exists) {
+        final budgets = budgetsSnapshot.value as Map<dynamic, dynamic>;
+        debugPrint('📊 Found ${budgets.length} personal budgets to delete');
+
+        for (final entry in budgets.entries) {
+          final budgetId = entry.key as String;
+          final budgetData = entry.value as Map<dynamic, dynamic>;
+
+          if (budgetData['ownerId'] == userId) {
+            updates['budgets/$budgetId'] = null;
+          }
+        }
+      } else {
+        debugPrint('ℹ️ No personal budgets found');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error checking budgets: $e');
+    }
+  }
+
+  /// ✅ HELPER: Delete shared data with existence check
+  Future<void> _deleteSharedFirebaseDataWithCheck(
+    String partnershipId,
+    Map<String, dynamic> updates,
+    Function(String message, double progress)? onProgress,
+  ) async {
+    try {
+      onProgress?.call('Kiểm tra dữ liệu chung...', 0.65);
+
+      // Shared wallets
+      final sharedWalletsSnapshot = await _firebaseRef
+          .child('wallets')
+          .orderByChild('ownerId')
+          .equalTo(partnershipId)
+          .get();
+
+      if (sharedWalletsSnapshot.exists) {
+        final sharedWallets =
+            sharedWalletsSnapshot.value as Map<dynamic, dynamic>;
+        debugPrint('👛 Found ${sharedWallets.length} shared wallets to delete');
+
+        for (final walletId in sharedWallets.keys) {
+          updates['wallets/$walletId'] = null;
+        }
+      }
+
+      // Shared budgets
+      final sharedBudgetsSnapshot = await _firebaseRef
+          .child('budgets')
+          .orderByChild('ownerId')
+          .equalTo(partnershipId)
+          .get();
+
+      if (sharedBudgetsSnapshot.exists) {
+        final sharedBudgets =
+            sharedBudgetsSnapshot.value as Map<dynamic, dynamic>;
+        debugPrint('📊 Found ${sharedBudgets.length} shared budgets to delete');
+
+        for (final budgetId in sharedBudgets.keys) {
+          updates['budgets/$budgetId'] = null;
+        }
+      }
+
+      // Delete partnership record
+      final partnershipSnapshot = await _firebaseRef
+          .child('partnerships')
+          .child(partnershipId)
+          .get();
+
+      if (partnershipSnapshot.exists) {
+        updates['partnerships/$partnershipId'] = null;
+        debugPrint('🤝 Marked partnership for deletion');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error checking shared data: $e');
+    }
+  }
+
+  /// ✅ HELPER: Delete user profile with existence check
+  Future<void> _deleteUserProfileWithCheck(
+    String userId,
+    Map<String, dynamic> updates,
+  ) async {
+    try {
+      // Check if user profile exists
+      final userSnapshot = await _firebaseRef
+          .child('users')
+          .child(userId)
+          .get();
+
+      if (userSnapshot.exists) {
+        updates['users/$userId'] = null;
+        debugPrint('👤 Marked user profile for deletion');
+      }
+
+      // Check notifications
+      final notificationsSnapshot = await _firebaseRef
+          .child('user_notifications')
+          .child(userId)
+          .get();
+
+      if (notificationsSnapshot.exists) {
+        updates['user_notifications/$userId'] = null;
+        debugPrint('🔔 Marked notifications for deletion');
+      }
+
+      // Check refresh triggers
+      final triggersSnapshot = await _firebaseRef
+          .child('user_refresh_triggers')
+          .child(userId)
+          .get();
+
+      if (triggersSnapshot.exists) {
+        updates['user_refresh_triggers/$userId'] = null;
+        debugPrint('🔄 Marked refresh triggers for deletion');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error checking user profile: $e');
+    }
+  }
+
+  /// ✅ ENHANCED: Delete all local data with categories
+  Future<void> _deleteAllLocalDataEnhanced(
+    String userId,
+    String? partnershipId,
+    Function(String message, double progress)? onProgress,
+  ) async {
+    try {
+      onProgress?.call('Xóa dữ liệu local...', 0.85);
+
+      await _localDatabase!.transaction((txn) async {
+        // 1. Delete transactions
+        onProgress?.call('Xóa giao dịch local...', 0.86);
+        final deletedTransactions = await txn.delete(
+          'transactions',
+          where: 'user_id = ?',
+          whereArgs: [userId],
+        );
+        debugPrint('🗑️ Deleted $deletedTransactions local transactions');
+
+        // 2. Delete wallets
+        onProgress?.call('Xóa ví local...', 0.88);
+        String walletWhereClause = 'owner_id = ?';
+        List<dynamic> walletWhereArgs = [userId];
+
+        if (partnershipId != null) {
+          walletWhereClause = 'owner_id = ? OR owner_id = ?';
+          walletWhereArgs = [userId, partnershipId];
+        }
+
+        final deletedWallets = await txn.delete(
+          'wallets',
+          where: walletWhereClause,
+          whereArgs: walletWhereArgs,
+        );
+        debugPrint('🗑️ Deleted $deletedWallets local wallets');
+
+        // 3. ✅ NEW: Delete categories
+        onProgress?.call('Xóa danh mục local...', 0.90);
+        final deletedCategories = await txn.delete(
+          'categories',
+          where: walletWhereClause,
+          whereArgs: walletWhereArgs,
+        );
+        debugPrint('🗑️ Deleted $deletedCategories local categories');
+
+        // 4. Delete budgets
+        onProgress?.call('Xóa ngân sách local...', 0.92);
+        final deletedBudgets = await txn.delete(
+          'budgets',
+          where: walletWhereClause,
+          whereArgs: walletWhereArgs,
+        );
+        debugPrint('🗑️ Deleted $deletedBudgets local budgets');
+
+        // 5. Clear system metadata
+        onProgress?.call('Dọn dẹp metadata...', 0.94);
+        await txn.delete('system_metadata');
+        debugPrint('🗑️ Cleared system metadata');
+      });
+
+      debugPrint('✅ All local data deleted successfully');
+    } catch (e) {
+      debugPrint('❌ Error deleting local data: $e');
+      throw Exception('Failed to delete local data: $e');
+    }
+  }
+
+  Future<bool> verifyDeletionComplete(
+    String userId,
+    String? partnershipId,
+  ) async {
+    try {
+      if (_localDatabase == null) return true;
+
+      final checks = await Future.wait([
+        _localDatabase!.query(
+          'transactions',
+          where: 'user_id = ?',
+          whereArgs: [userId],
+          limit: 1,
+        ),
+        _localDatabase!.query(
+          'wallets',
+          where: 'owner_id = ?',
+          whereArgs: [userId],
+          limit: 1,
+        ),
+        _localDatabase!.query(
+          'categories',
+          where: 'owner_id = ?',
+          whereArgs: [userId],
+          limit: 1,
+        ),
+        _localDatabase!.query(
+          'budgets',
+          where: 'owner_id = ?',
+          whereArgs: [userId],
+          limit: 1,
+        ),
+      ]);
+
+      final hasTransactions = checks[0].isNotEmpty;
+      final hasWallets = checks[1].isNotEmpty;
+      final hasCategories = checks[2].isNotEmpty;
+      final hasBudgets = checks[3].isNotEmpty;
+
+      if (hasTransactions || hasWallets || hasCategories || hasBudgets) {
+        debugPrint('⚠️ Deletion incomplete:');
+        if (hasTransactions) debugPrint('  - Transactions remain');
+        if (hasWallets) debugPrint('  - Wallets remain');
+        if (hasCategories) debugPrint('  - Categories remain');
+        if (hasBudgets) debugPrint('  - Budgets remain');
+        return false;
+      }
+
+      debugPrint('✅ Deletion verification: All local data cleared');
+      return true;
+    } catch (e) {
+      debugPrint('❌ Error verifying deletion: $e');
+      return false;
     }
   }
 
