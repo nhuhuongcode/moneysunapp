@@ -55,7 +55,6 @@ class DataService extends ChangeNotifier {
   String? get currentUserId => _userProvider?.currentUser?.uid;
   String? get partnershipId => _userProvider?.partnershipId;
 
-  // ============ INITIALIZATION ============
   Future<void> initialize(UserProvider userProvider) async {
     if (_isInitialized) {
       debugPrint('⚠️ DataService already initialized');
@@ -76,7 +75,10 @@ class DataService extends ChangeNotifier {
       // 3. Start background services
       _startBackgroundServices();
 
-      // 4. Initial sync if online
+      // 4. ✅ NEW: Setup partnership change listener
+      _listenToPartnershipChanges();
+
+      // 5. Initial sync if online
       if (_isOnline && currentUserId != null) {
         unawaited(_performInitialSync());
       }
@@ -5398,6 +5400,75 @@ class DataService extends ChangeNotifier {
     }
   }
 
+  StreamSubscription<DatabaseEvent>? _partnershipChangeSubscription;
+
+  // ✅ CORRECTED: Listen to partnership changes using existing methods
+  void _listenToPartnershipChanges() {
+    if (currentUserId == null) return;
+
+    debugPrint('👂 Setting up partnership change listener for: $currentUserId');
+
+    // Cancel existing subscription if any
+    _partnershipChangeSubscription?.cancel();
+
+    _partnershipChangeSubscription =
+        _firebaseRef // ✅ CORRECT: _firebaseRef not _dbRef
+            .child('users')
+            .child(currentUserId!)
+            .child('lastPartnerUpdate')
+            .onValue
+            .listen((event) async {
+              if (!event.snapshot.exists) return;
+
+              final timestamp = event.snapshot.value as int?;
+              if (timestamp == null) return;
+
+              final updateTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+              final secondsSinceUpdate = DateTime.now()
+                  .difference(updateTime)
+                  .inSeconds;
+
+              debugPrint(
+                '🔔 Partnership update timestamp detected: $updateTime ($secondsSinceUpdate seconds ago)',
+              );
+
+              // Only process recent updates (within last 30 seconds)
+              if (secondsSinceUpdate < 30) {
+                debugPrint(
+                  '🔄 Recent partnership change detected - refreshing all data',
+                );
+
+                try {
+                  // ✅ CORRECT: Use existing methods without parameters
+                  await _downloadChangesFromFirebase();
+
+                  // Force reload categories, wallets, budgets
+                  // These methods already exist and handle the data refresh
+                  await Future.wait([
+                    getCategories(
+                      includeArchived: false,
+                    ), // ✅ Triggers internal reload
+                    getWallets(
+                      includeArchived: false,
+                    ), // ✅ Triggers internal reload
+                    getBudgets(
+                      includeDeleted: false,
+                    ), // ✅ Triggers internal reload
+                  ]);
+
+                  // Notify all listeners (providers) about the changes
+                  notifyListeners();
+
+                  debugPrint('✅ Partnership data refresh completed');
+                } catch (e) {
+                  debugPrint('❌ Error refreshing partnership data: $e');
+                }
+              }
+            });
+
+    debugPrint('✅ Partnership change listener active');
+  }
+
   Future<bool> verifyDeletionComplete(
     String userId,
     String? partnershipId,
@@ -5459,6 +5530,7 @@ class DataService extends ChangeNotifier {
     _connectivitySubscription?.cancel();
     _syncTimer?.cancel();
     _localDatabase?.close();
+    _partnershipChangeSubscription?.cancel();
     super.dispose();
   }
 }

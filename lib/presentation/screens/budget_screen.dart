@@ -13,14 +13,14 @@ import 'package:moneysun/data/providers/connection_status_provider.dart';
 import 'package:moneysun/data/providers/budget_provider.dart';
 import 'package:moneysun/presentation/widgets/smart_amount_input.dart';
 
-class BudgetScreenComplete extends StatefulWidget {
-  const BudgetScreenComplete({super.key});
+class BudgetScreen extends StatefulWidget {
+  const BudgetScreen({super.key});
 
   @override
-  State<BudgetScreenComplete> createState() => _BudgetScreenCompleteState();
+  State<BudgetScreen> createState() => _BudgetScreenState();
 }
 
-class _BudgetScreenCompleteState extends State<BudgetScreenComplete>
+class _BudgetScreenState extends State<BudgetScreen>
     with TickerProviderStateMixin {
   late AnimationController _slideController;
   late AnimationController _progressController;

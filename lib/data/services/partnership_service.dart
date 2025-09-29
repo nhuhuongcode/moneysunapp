@@ -193,7 +193,9 @@ class PartnershipService {
     }
   }
 
-  /// ✅ NEW: Execute partnership creation with proper notifications
+  // lib/data/services/partnership_service.dart
+
+  // ✅ ENHANCED: _executePartnershipCreation with explicit inviter notification
   Future<void> _executePartnershipCreation(
     Partnership partnership,
     String inviterUid,
@@ -206,67 +208,136 @@ class PartnershipService {
     final timestamp = ServerValue.timestamp;
     final partnershipTimestamp = partnership.createdAt.millisecondsSinceEpoch;
 
-    // ✅ STEP 1: Create partnership record first
-    await _dbRef.child('partnerships').child(partnershipId).set({
-      'id': partnershipId,
-      'memberIds': {for (var id in partnership.memberIds) id: true},
-      'createdAt': partnershipTimestamp,
-      'memberNames': partnership.memberNames,
-      'isActive': true,
-      'lastSyncTime': timestamp,
-    });
+    debugPrint('🔧 Creating partnership: $partnershipId');
+    debugPrint('   Inviter: $inviterUid');
+    debugPrint('   Accepter: $currentUid');
 
-    debugPrint('✅ Partnership record created: $partnershipId');
+    try {
+      // ✅ STEP 1: Create partnership record
+      await _dbRef.child('partnerships').child(partnershipId).set({
+        'id': partnershipId,
+        'memberIds': {for (var id in partnership.memberIds) id: true},
+        'createdAt': partnershipTimestamp,
+        'memberNames': partnership.memberNames,
+        'isActive': true,
+        'lastSyncTime': timestamp,
+      });
+      debugPrint('✅ Partnership record created');
 
-    // ✅ STEP 2: Update both users simultaneously with enhanced data
-    final userUpdates = <String, dynamic>{
-      // Update inviter with full partner info
-      'users/$inviterUid/partnershipId': partnershipId,
-      'users/$inviterUid/partnerUid': currentUid,
-      'users/$inviterUid/partnerDisplayName':
-          userProvider.currentUser!.displayName ?? 'Người dùng',
-      'users/$inviterUid/partnerPhotoURL': userProvider.currentUser!.photoURL,
-      'users/$inviterUid/partnershipCreatedAt': partnershipTimestamp,
-      'users/$inviterUid/currentInviteCode': null,
-      'users/$inviterUid/inviteCodeExpiry': null,
-      'users/$inviterUid/updatedAt': timestamp,
-      'users/$inviterUid/lastPartnerUpdate': timestamp,
+      // ✅ STEP 2: Update both users WITH EXPLICIT TRIGGERS
+      final userUpdates = <String, dynamic>{
+        // ========== INVITER UPDATES ==========
+        'users/$inviterUid/partnershipId': partnershipId,
+        'users/$inviterUid/partnerUid': currentUid,
+        'users/$inviterUid/partnerDisplayName':
+            userProvider.currentUser!.displayName ?? 'Người dùng',
+        'users/$inviterUid/partnerPhotoURL': userProvider.currentUser!.photoURL,
+        'users/$inviterUid/partnershipCreatedAt': partnershipTimestamp,
+        'users/$inviterUid/currentInviteCode': null,
+        'users/$inviterUid/inviteCodeExpiry': null,
+        'users/$inviterUid/updatedAt': timestamp,
+        'users/$inviterUid/lastPartnerUpdate': timestamp, // ← TRIGGER
+        // ========== ACCEPTER UPDATES ==========
+        'users/$currentUid/partnershipId': partnershipId,
+        'users/$currentUid/partnerUid': inviterUid,
+        'users/$currentUid/partnerDisplayName':
+            inviterData['displayName']?.toString() ?? 'Người dùng',
+        'users/$currentUid/partnerPhotoURL': inviterData['photoURL']
+            ?.toString(),
+        'users/$currentUid/partnershipCreatedAt': partnershipTimestamp,
+        'users/$currentUid/updatedAt': timestamp,
+        'users/$currentUid/lastPartnerUpdate': timestamp, // ← TRIGGER
+        // Remove invite code
+        'inviteCodes/$inviteCode': null,
+      };
 
-      // Update current user with full partner info
-      'users/$currentUid/partnershipId': partnershipId,
-      'users/$currentUid/partnerUid': inviterUid,
-      'users/$currentUid/partnerDisplayName':
-          inviterData['displayName']?.toString() ?? 'Người dùng',
-      'users/$currentUid/partnerPhotoURL': inviterData['photoURL']?.toString(),
-      'users/$currentUid/partnershipCreatedAt': partnershipTimestamp,
-      'users/$currentUid/updatedAt': timestamp,
-      'users/$currentUid/lastPartnerUpdate': timestamp,
+      await _dbRef.update(userUpdates);
+      debugPrint('✅ Both users updated in Firebase');
 
-      // Remove invite code
-      'inviteCodes/$inviteCode': null,
-    };
+      // ✅ STEP 3: Send HIGH-PRIORITY refresh triggers to BOTH users
+      await _sendRefreshTriggersToUsers(inviterUid, currentUid, partnershipId);
 
-    await _dbRef.update(userUpdates);
-    debugPrint('✅ Both users updated with partnership info');
+      // ✅ STEP 4: Send notifications
+      await _sendPartnershipNotifications(
+        inviterUid,
+        currentUid,
+        userProvider.currentUser!.displayName ?? 'Người dùng',
+        inviterData['displayName']?.toString() ?? 'Người dùng',
+      );
 
-    // ✅ STEP 3: Send immediate notifications
-    await _sendPartnershipNotifications(
-      inviterUid,
-      currentUid,
-      userProvider.currentUser!.displayName ?? 'Người dùng',
-      inviterData['displayName']?.toString() ?? 'Người dùng',
-    );
+      // ✅ STEP 5: Trigger global partnership update event
+      await _triggerGlobalPartnershipUpdate(partnershipId, [
+        inviterUid,
+        currentUid,
+      ]);
 
-    // ✅ STEP 4: Force refresh UserProvider data
-    await _forceRefreshUserProviders(inviterUid, currentUid);
-
-    // ✅ STEP 5: Trigger DataService sync
-    if (_dataService.isInitialized && _dataService.isOnline) {
-      unawaited(_dataService.forceSyncNow());
+      debugPrint('✅ Partnership creation completed successfully');
+    } catch (e) {
+      debugPrint('❌ Error in partnership creation: $e');
+      rethrow;
     }
   }
 
-  /// ✅ NEW: Send notifications to both users
+  // ✅ NEW: Send refresh triggers to both users
+  Future<void> _sendRefreshTriggersToUsers(
+    String inviterUid,
+    String currentUid,
+    String partnershipId,
+  ) async {
+    try {
+      debugPrint('📤 Sending refresh triggers to both users...');
+
+      final refreshData = {
+        'type': 'partnership_created',
+        'partnershipId': partnershipId,
+        'timestamp': ServerValue.timestamp,
+        'requireRefresh': true,
+        'priority': 'high',
+      };
+
+      // Send to both users simultaneously
+      await Future.wait([
+        _dbRef
+            .child('user_refresh_triggers')
+            .child(inviterUid)
+            .push()
+            .set(refreshData),
+        _dbRef
+            .child('user_refresh_triggers')
+            .child(currentUid)
+            .push()
+            .set(refreshData),
+      ]);
+
+      debugPrint('✅ Refresh triggers sent to both users');
+    } catch (e) {
+      debugPrint('❌ Error sending refresh triggers: $e');
+    }
+  }
+
+  // ✅ NEW: Trigger global partnership update
+  Future<void> _triggerGlobalPartnershipUpdate(
+    String partnershipId,
+    List<String> affectedUsers,
+  ) async {
+    try {
+      debugPrint('🌐 Triggering global partnership update...');
+
+      await _dbRef.child('partnership_updates').push().set({
+        'type': 'partnership_created',
+        'partnershipId': partnershipId,
+        'affectedUsers': affectedUsers,
+        'timestamp': ServerValue.timestamp,
+        'priority': 'high',
+      });
+
+      debugPrint('✅ Global partnership update triggered');
+    } catch (e) {
+      debugPrint('❌ Error triggering global update: $e');
+    }
+  }
+
+  // ✅ ENHANCED: Send notifications with action data
   Future<void> _sendPartnershipNotifications(
     String inviterUid,
     String currentUid,
@@ -276,7 +347,7 @@ class PartnershipService {
     try {
       final timestamp = ServerValue.timestamp;
 
-      // Notification for inviter
+      // ✅ CRITICAL: High-priority notification for INVITER
       await _dbRef.child('user_notifications').child(inviterUid).push().set({
         'title': 'Kết nối thành công! 🎉',
         'body': '$currentUserName đã chấp nhận lời mời kết nối của bạn.',
@@ -284,13 +355,15 @@ class PartnershipService {
         'timestamp': timestamp,
         'isRead': false,
         'priority': 'high',
+        'requiresAction': true, // ← Force UI update
         'actionData': {
           'partnerUid': currentUid,
           'partnerName': currentUserName,
+          'action': 'refresh_partnership',
         },
       });
 
-      // Notification for current user
+      // Notification for accepter
       await _dbRef.child('user_notifications').child(currentUid).push().set({
         'title': 'Kết nối thành công! 🎉',
         'body': 'Bạn đã kết nối thành công với $inviterName.',
@@ -298,20 +371,64 @@ class PartnershipService {
         'timestamp': timestamp,
         'isRead': false,
         'priority': 'high',
-        'actionData': {'partnerUid': inviterUid, 'partnerName': inviterName},
+        'requiresAction': true,
+        'actionData': {
+          'partnerUid': inviterUid,
+          'partnerName': inviterName,
+          'action': 'refresh_partnership',
+        },
       });
 
-      // ✅ IMPORTANT: Send real-time update trigger
-      await _dbRef.child('partnership_updates').push().set({
-        'type': 'partnership_created',
-        'partnershipId': 'temp', // Will be updated
-        'affectedUsers': [inviterUid, currentUid],
-        'timestamp': timestamp,
-      });
-
-      debugPrint('✅ Partnership notifications sent to both users');
+      debugPrint('✅ High-priority notifications sent to both users');
     } catch (e) {
-      debugPrint('❌ Error sending partnership notifications: $e');
+      debugPrint('❌ Error sending notifications: $e');
+    }
+  }
+
+  // ✅ NEW: Force refresh UserProvider and WAIT for completion
+  Future<void> _forceRefreshUserProviderAndWait(
+    UserProvider userProvider,
+    String expectedPartnershipId,
+  ) async {
+    debugPrint('🔄 Force refreshing UserProvider and waiting...');
+
+    // Trigger refresh
+    await userProvider.refreshUser();
+
+    // Wait up to 5 seconds for partnership to be set
+    final stopwatch = Stopwatch()..start();
+    while (userProvider.partnershipId != expectedPartnershipId &&
+        stopwatch.elapsed.inSeconds < 5) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      await userProvider.refreshUser(); // Keep trying
+    }
+
+    if (userProvider.partnershipId == expectedPartnershipId) {
+      debugPrint('✅ UserProvider updated with partnership');
+    } else {
+      debugPrint('⚠️ UserProvider update timeout - but continuing');
+    }
+  }
+
+  // ✅ NEW: Force sync DataService AND all providers
+  Future<void> _forceSyncDataServiceWithProviders() async {
+    debugPrint('🔄 Force syncing DataService and providers...');
+
+    if (!_dataService.isInitialized || !_dataService.isOnline) {
+      debugPrint('⚠️ DataService not ready for sync');
+      return;
+    }
+
+    try {
+      // ✅ WAIT for sync to complete (no unawaited)
+      await _dataService.forceSyncNow();
+
+      // ✅ Additional delay to ensure Firebase propagation
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      debugPrint('✅ DataService sync completed');
+    } catch (e) {
+      debugPrint('❌ Error syncing DataService: $e');
     }
   }
 

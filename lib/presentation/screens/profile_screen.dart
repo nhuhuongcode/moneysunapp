@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
@@ -31,6 +32,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   final AuthService _authService = AuthService();
   final _inviteCodeController = TextEditingController();
 
+  StreamSubscription<DatabaseEvent>? _notificationSubscription;
+
   // Animation controllers
   late AnimationController _fadeController;
   late AnimationController _slideController;
@@ -39,7 +42,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   late Animation<Offset> _slideAnimation;
   late Animation<double> _pulseAnimation;
 
-  // State variables
+  bool _isAcceptingInvite = false;
   bool _isLoading = false;
   String? _currentInviteCode;
   bool _isGeneratingCode = false;
@@ -50,6 +53,58 @@ class _ProfileScreenState extends State<ProfileScreen>
     super.initState();
     _initializeAnimations();
     _loadCurrentInviteCode();
+    _setupNotificationListener();
+  }
+
+  // ✅ NEW: Setup notification listener
+  void _setupNotificationListener() {
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+    final userId = userProvider.currentUser?.uid;
+
+    if (userId == null) return;
+
+    _notificationSubscription?.cancel();
+
+    _notificationSubscription = FirebaseDatabase.instance
+        .ref()
+        .child('user_notifications')
+        .child(userId)
+        .orderByChild('timestamp')
+        .limitToLast(5)
+        .onChildAdded
+        .listen((event) async {
+          if (!mounted) return;
+
+          try {
+            final data = event.snapshot.value as Map<dynamic, dynamic>;
+            final type = data['type'] as String?;
+            final requiresAction = data['requiresAction'] as bool? ?? false;
+
+            // Handle partnership notifications
+            if (type == 'partnership_accepted' && requiresAction) {
+              debugPrint('🔔 Partnership accepted notification received!');
+
+              // Force refresh
+              await userProvider.refreshUser();
+              await userProvider.refreshPartnershipData();
+              await _forceRefreshAllProviders();
+
+              // Show notification
+              if (mounted) {
+                _showSuccessSnackBar(
+                  data['body'] as String? ?? 'Có thông báo mới',
+                );
+              }
+
+              // Mark as read
+              await event.snapshot.ref.update({'isRead': true});
+            }
+          } catch (e) {
+            debugPrint('❌ Error handling notification: $e');
+          }
+        });
+
+    debugPrint('✅ Notification listener setup for: $userId');
   }
 
   // ============ ANIMATION SETUP ============
@@ -453,84 +508,6 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Widget _buildDefaultAvatar() {
     return const Icon(Icons.person, size: 40, color: Colors.white);
-  }
-
-  Widget _buildPartnershipSection(UserProvider userProvider) {
-    return Card(
-      elevation: 6,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      clipBehavior: Clip.antiAlias,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              userProvider.hasPartner
-                  ? Colors.green.withOpacity(0.05)
-                  : Colors.blue.withOpacity(0.05),
-              Colors.transparent,
-            ],
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: userProvider.hasPartner
-                        ? Colors.green.withOpacity(0.15)
-                        : Colors.blue.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Icon(
-                    userProvider.hasPartner ? Icons.people : Icons.person_add,
-                    color: userProvider.hasPartner ? Colors.green : Colors.blue,
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Quản lý chung',
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        userProvider.hasPartner
-                            ? 'Kết nối với đối tác'
-                            : 'Chia sẻ chi tiêu với người thân',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 24),
-
-            // Partnership content
-            userProvider.hasPartner
-                ? _buildActivePartnershipContent(userProvider)
-                : _buildInvitePartnershipContent(userProvider),
-          ],
-        ),
-      ),
-    );
   }
 
   Widget _buildActivePartnershipContent(UserProvider userProvider) {
@@ -2724,68 +2701,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
   }
 
-  Future<void> _acceptInvite(UserProvider userProvider) async {
-    final inviteCode = _inviteCodeController.text.trim();
-
-    // Validate invite code format
-    if (inviteCode.length != 6) {
-      _showErrorSnackBar('Mã mời phải có 6 ký tự');
-      return;
-    }
-
-    // Check if user already has a partner
-    if (userProvider.hasPartner) {
-      _showErrorSnackBar('Bạn đã có đối tác rồi');
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
-      // First validate the invite code
-      final validation = await _partnershipService.validateInviteCode(
-        inviteCode,
-      );
-
-      if (!validation['valid']) {
-        _showErrorSnackBar(validation['reason'] ?? 'Mã mời không hợp lệ');
-        return;
-      }
-
-      // Show confirmation dialog with inviter info
-      final shouldProceed = await _showAcceptInviteConfirmation(
-        validation['inviterName'] ?? 'Người dùng',
-        validation['inviterEmail'] ?? '',
-      );
-
-      if (!shouldProceed) return;
-
-      // Accept the invitation
-      await _partnershipService.acceptInvitation(inviteCode, userProvider);
-
-      if (mounted) {
-        _inviteCodeController.clear();
-        _showSuccessSnackBar(
-          'Kết nối thành công với ${validation['inviterName']}!',
-        );
-
-        // Refresh partnership data
-        await userProvider.refreshPartnershipData();
-
-        // Clear current invite code since we now have a partner
-        setState(() => _currentInviteCode = null);
-      }
-    } catch (e) {
-      if (mounted) {
-        _showErrorSnackBar('Lỗi: ${_getErrorMessage(e)}');
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
-  }
-
   Future<void> _cancelCurrentInviteCode() async {
     if (_currentInviteCode == null) return;
 
@@ -2921,58 +2836,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
 
     return errorMessage;
-  }
-
-  void _showDisconnectDialog(UserProvider userProvider) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Ngắt kết nối Partnership'),
-        content: Text(
-          'Bạn có chắc chắn muốn ngắt kết nối với ${userProvider.partnerDisplayName}?\n\n'
-          'Sau khi ngắt kết nối:\n'
-          '• Bạn sẽ không còn thấy dữ liệu của đối tác\n'
-          '• Đối tác cũng không thấy dữ liệu của bạn\n'
-          '• Dữ liệu chung sẽ bị ẩn\n\n'
-          'Thao tác này không thể hoàn tác.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Hủy'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await _disconnectPartnership(userProvider);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text(
-              'Ngắt kết nối',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _disconnectPartnership(UserProvider userProvider) async {
-    setState(() => _isLoading = true);
-
-    try {
-      await _partnershipService.disconnectPartnership(userProvider);
-      _showSuccessSnackBar('Đã ngắt kết nối thành công');
-      setState(() => _currentInviteCode = null);
-      _loadCurrentInviteCode();
-    } catch (e) {
-      _showErrorSnackBar('Lỗi khi ngắt kết nối: ${_getErrorMessage(e)}');
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
   }
 
   void _showPartnershipInfo(UserProvider userProvider) {
@@ -3490,12 +3353,542 @@ class _ProfileScreenState extends State<ProfileScreen>
     _showErrorSnackBar('$feature chưa được triển khai');
   }
 
+  Future<void> _acceptInvite(UserProvider userProvider) async {
+    final inviteCode = _inviteCodeController.text.trim();
+
+    // Validate invite code format
+    if (inviteCode.length != 6) {
+      _showErrorSnackBar('Mã mời phải có 6 ký tự');
+      return;
+    }
+
+    // Check if user already has a partner
+    if (userProvider.hasPartner) {
+      _showErrorSnackBar('Bạn đã có đối tác rồi');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _isAcceptingInvite = true;
+    });
+
+    try {
+      debugPrint('🤝 Starting invitation acceptance process...');
+
+      // First validate the invite code
+      final validation = await _partnershipService.validateInviteCode(
+        inviteCode,
+      );
+
+      if (!validation['valid']) {
+        _showErrorSnackBar(validation['reason'] ?? 'Mã mời không hợp lệ');
+        return;
+      }
+
+      // Show confirmation dialog with inviter info
+      final shouldProceed = await _showAcceptInviteConfirmation(
+        validation['inviterName'] ?? 'Người dùng',
+        validation['inviterEmail'] ?? '',
+      );
+
+      if (!shouldProceed) return;
+
+      // ✅ Show processing dialog
+      _showAcceptInviteProgressDialog();
+
+      // Accept the invitation
+      debugPrint('📨 Accepting invitation with code: $inviteCode');
+      await _partnershipService.acceptInvitation(inviteCode, userProvider);
+
+      debugPrint('✅ Invitation accepted, waiting for UserProvider update...');
+
+      // ✅ CRITICAL: Wait for UserProvider to update
+      await _waitForPartnershipUpdate(userProvider);
+
+      debugPrint('🔄 Force refreshing all providers...');
+
+      // ✅ Force refresh all providers
+      await _forceRefreshAllProviders();
+
+      debugPrint('✅ All providers refreshed');
+
+      // Close progress dialog
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+
+      if (mounted) {
+        _inviteCodeController.clear();
+
+        // Show success with detailed info
+        _showSuccessDialog(
+          'Kết nối thành công! 🎉',
+          'Bạn đã kết nối thành công với ${validation['inviterName']}.\n\n'
+              'Bây giờ bạn có thể:\n'
+              '• Xem dữ liệu chung\n'
+              '• Tạo ví và ngân sách chung\n'
+              '• Quản lý chi tiêu cùng nhau',
+        );
+
+        // Clear current invite code since we now have a partner
+        setState(() => _currentInviteCode = null);
+      }
+    } catch (e) {
+      debugPrint('❌ Error accepting invitation: $e');
+
+      // Close progress dialog if showing
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+
+      if (mounted) {
+        _showErrorSnackBar('Lỗi: ${_getErrorMessage(e)}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isAcceptingInvite = false;
+        });
+      }
+    }
+  }
+
+  // ✅ NEW: Show accept invite progress dialog
+  void _showAcceptInviteProgressDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => WillPopScope(
+        onWillPop: () async => false,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 20),
+              // Animated connection icon
+              TweenAnimationBuilder<double>(
+                duration: const Duration(seconds: 1),
+                tween: Tween(begin: 0.0, end: 1.0),
+                builder: (context, value, child) {
+                  return Transform.scale(
+                    scale: 0.8 + (0.2 * value),
+                    child: Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: Colors.green.withOpacity(0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.people,
+                        size: 40,
+                        color: Colors.green,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Đang kết nối...',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Vui lòng đợi trong giây lát',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              const CircularProgressIndicator(),
+              const SizedBox(height: 24),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info, color: Colors.blue, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Đang đồng bộ dữ liệu với đối tác...',
+                        style: TextStyle(
+                          color: Colors.blue.shade700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ✅ NEW: Wait for UserProvider to update with partnership
+  Future<void> _waitForPartnershipUpdate(UserProvider userProvider) async {
+    debugPrint('⏳ Waiting for partnership update in UserProvider...');
+
+    final stopwatch = Stopwatch()..start();
+    int attempts = 0;
+
+    while (!userProvider.hasPartner && stopwatch.elapsed.inSeconds < 10) {
+      attempts++;
+      debugPrint(
+        '   Attempt $attempts - hasPartner: ${userProvider.hasPartner}',
+      );
+
+      await Future.delayed(const Duration(milliseconds: 200));
+      await userProvider.refreshUser();
+
+      // Check every 5 attempts
+      if (attempts % 5 == 0) {
+        debugPrint(
+          '   Still waiting... (${stopwatch.elapsed.inSeconds}s elapsed)',
+        );
+      }
+    }
+
+    if (userProvider.hasPartner) {
+      debugPrint('✅ Partnership confirmed in UserProvider');
+      debugPrint('   Partnership ID: ${userProvider.partnershipId}');
+      debugPrint('   Partner UID: ${userProvider.partnerUid}');
+      debugPrint('   Partner Name: ${userProvider.partnerDisplayName}');
+    } else {
+      debugPrint(
+        '⚠️ Partnership not confirmed after ${stopwatch.elapsed.inSeconds}s',
+      );
+    }
+  }
+
+  // ✅ NEW: Force refresh all providers
+  Future<void> _forceRefreshAllProviders() async {
+    debugPrint('🔄 Force refreshing all providers...');
+
+    try {
+      final walletProvider = Provider.of<WalletProvider>(
+        context,
+        listen: false,
+      );
+      final categoryProvider = Provider.of<CategoryProvider>(
+        context,
+        listen: false,
+      );
+      final budgetProvider = Provider.of<BudgetProvider>(
+        context,
+        listen: false,
+      );
+      final transactionProvider = Provider.of<TransactionProvider>(
+        context,
+        listen: false,
+      );
+
+      await Future.wait([
+        walletProvider.loadWallets(forceRefresh: true),
+        categoryProvider.loadCategories(forceRefresh: true),
+        budgetProvider.loadBudgets(forceRefresh: true),
+        transactionProvider.loadTransactions(forceRefresh: true),
+      ]);
+
+      debugPrint('✅ All providers refreshed successfully');
+    } catch (e) {
+      debugPrint('⚠️ Error refreshing providers: $e');
+      // Don't throw - partnership still succeeded
+    }
+  }
+
+  // ✅ NEW: Show success dialog with details
+  void _showSuccessDialog(String title, String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.check_circle,
+                color: Colors.green,
+                size: 32,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(title, style: const TextStyle(color: Colors.green)),
+            ),
+          ],
+        ),
+        content: Text(message),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Tuyệt vời!'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ✅ ENHANCED: Show disconnect dialog with better UX
+  void _showDisconnectDialog(UserProvider userProvider) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.link_off, color: Colors.red),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text('Ngắt kết nối', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Bạn có chắc chắn muốn ngắt kết nối với ${userProvider.partnerDisplayName}?',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Sau khi ngắt kết nối:',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildDisconnectItem(
+                    'Bạn sẽ không còn thấy dữ liệu của đối tác',
+                  ),
+                  _buildDisconnectItem(
+                    'Đối tác cũng không thấy dữ liệu của bạn',
+                  ),
+                  _buildDisconnectItem('Dữ liệu chung sẽ bị ẩn'),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Thao tác này không thể hoàn tác.',
+                    style: TextStyle(
+                      color: Colors.red.shade700,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _disconnectPartnership(userProvider);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Ngắt kết nối'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPartnershipSection(UserProvider userProvider) {
+    return Card(
+      elevation: 6,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              userProvider.hasPartner
+                  ? Colors.green.withOpacity(0.05)
+                  : Colors.blue.withOpacity(0.05),
+              Colors.transparent,
+            ],
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header with refresh button for debugging
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: userProvider.hasPartner
+                        ? Colors.green.withOpacity(0.15)
+                        : Colors.blue.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Icon(
+                    userProvider.hasPartner ? Icons.people : Icons.person_add,
+                    color: userProvider.hasPartner ? Colors.green : Colors.blue,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Quản lý chung',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        userProvider.hasPartner
+                            ? 'Kết nối với đối tác'
+                            : 'Chia sẻ chi tiêu với người thân',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // ✅ NEW: Manual refresh button (for debugging)
+                if (kDebugMode)
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 20),
+                    onPressed: () async {
+                      _showLoadingSnackBar('Đang refresh...');
+                      await userProvider.refreshUser();
+                      await userProvider.refreshPartnershipData();
+                      await _forceRefreshAllProviders();
+                      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                      _showSuccessSnackBar('Đã refresh!');
+                    },
+                    tooltip: 'Force Refresh (Debug)',
+                  ),
+              ],
+            ),
+
+            const SizedBox(height: 24),
+
+            // Partnership content
+            userProvider.hasPartner
+                ? _buildActivePartnershipContent(userProvider)
+                : _buildInvitePartnershipContent(userProvider),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDisconnectItem(String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Icon(Icons.circle, size: 6, color: Colors.red.shade700),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(fontSize: 13, color: Colors.red.shade700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ✅ ENHANCED: Disconnect partnership with progress
+  Future<void> _disconnectPartnership(UserProvider userProvider) async {
+    setState(() => _isLoading = true);
+
+    try {
+      // Show progress
+      _showLoadingSnackBar('Đang ngắt kết nối...');
+
+      await _partnershipService.disconnectPartnership(userProvider);
+
+      // Wait a bit for data to sync
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Refresh all providers
+      await _forceRefreshAllProviders();
+
+      // Hide loading
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      _showSuccessSnackBar('Đã ngắt kết nối thành công');
+
+      setState(() => _currentInviteCode = null);
+      await _loadCurrentInviteCode();
+    } catch (e) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      _showErrorSnackBar('Lỗi khi ngắt kết nối: ${_getErrorMessage(e)}');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
   @override
   void dispose() {
     _fadeController.dispose();
     _slideController.dispose();
     _pulseController.dispose();
     _inviteCodeController.dispose();
+    _notificationSubscription?.cancel();
     super.dispose();
   }
 }
