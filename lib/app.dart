@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart' hide NotificationListener;
 import 'package:moneysun/core/theme/app_theme.dart';
+import 'package:moneysun/data/providers/budget_provider.dart';
 import 'package:moneysun/data/providers/category_provider.dart';
 import 'package:moneysun/data/providers/connection_status_provider.dart';
 import 'package:moneysun/data/providers/transaction_provider.dart';
@@ -111,6 +112,38 @@ class MoneySunApp extends StatelessWidget {
             }
             return provider;
           },
+        ),
+
+        ChangeNotifierProxyProvider4<
+          DataService,
+          UserProvider,
+          TransactionProvider,
+          CategoryProvider,
+          BudgetProvider
+        >(
+          create: (context) => BudgetProvider(
+            Provider.of<DataService>(context, listen: false),
+            Provider.of<UserProvider>(context, listen: false),
+            Provider.of<TransactionProvider>(context, listen: false),
+            Provider.of<CategoryProvider>(context, listen: false),
+          ),
+          update:
+              (
+                context,
+                dataService,
+                userProvider,
+                transactionProvider,
+                categoryProvider,
+                budgetProvider,
+              ) {
+                return budgetProvider ??
+                    BudgetProvider(
+                      dataService,
+                      userProvider,
+                      transactionProvider,
+                      categoryProvider,
+                    );
+              },
         ),
       ],
       child: Consumer<ConnectionStatusProvider>(
