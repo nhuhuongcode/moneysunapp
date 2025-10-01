@@ -1,11 +1,10 @@
-// lib/data/services/partnership_service.dart - Enhanced version with separate inviteCodes collection
+// lib/data/services/partnership_service.dart - Enhanced with comprehensive refresh
 import 'dart:async';
 import 'dart:math';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:moneysun/data/models/partnership_model.dart';
-import 'package:moneysun/data/models/transaction_model.dart';
 import 'package:moneysun/data/models/user_model.dart';
 import 'package:moneysun/data/providers/user_provider.dart';
 import 'package:moneysun/data/services/data_service.dart';
@@ -21,7 +20,6 @@ class PartnershipService {
 
   // ============ INVITE CODE MANAGEMENT ============
 
-  /// Generate invite code for partnership
   Future<String> generateInviteCode(UserProvider userProvider) async {
     if (userProvider.currentUser == null) {
       throw Exception('Người dùng chưa đăng nhập');
@@ -34,10 +32,8 @@ class PartnershipService {
     try {
       debugPrint('🔗 Đang tạo mã mời...');
 
-      // Xóa mã mời cũ nếu có
       await _clearUserInviteCode(userProvider.currentUser!.uid);
 
-      // Generate unique 6-digit code
       String inviteCode;
       bool isUnique = false;
       int attempts = 0;
@@ -49,7 +45,6 @@ class PartnershipService {
         attempts++;
 
         if (!isUnique && attempts < maxAttempts) {
-          // Wait a bit before retrying
           await Future.delayed(Duration(milliseconds: 100 * attempts));
         }
       } while (!isUnique && attempts < maxAttempts);
@@ -58,10 +53,8 @@ class PartnershipService {
         throw Exception('Không thể tạo mã mời duy nhất. Vui lòng thử lại.');
       }
 
-      // Set expiry time (24 hours from now)
       final expiryTime = DateTime.now().add(const Duration(hours: 24));
 
-      // Save invite code to separate collection
       await _dbRef.child('inviteCodes').child(inviteCode).set({
         'userId': userProvider.currentUser!.uid,
         'userDisplayName':
@@ -72,7 +65,6 @@ class PartnershipService {
         'isActive': true,
       });
 
-      // Also save reference in user profile for easy lookup
       await _dbRef.child('users').child(userProvider.currentUser!.uid).update({
         'currentInviteCode': inviteCode,
         'inviteCodeExpiry': expiryTime.millisecondsSinceEpoch,
@@ -89,6 +81,7 @@ class PartnershipService {
     }
   }
 
+  /// ✅ FIXED: Accept invitation with comprehensive refresh
   Future<void> acceptInvitation(
     String inviteCode,
     UserProvider userProvider,
@@ -101,7 +94,6 @@ class PartnershipService {
       throw Exception('Bạn đã có đối tác rồi');
     }
 
-    // Validate invite code format
     if (inviteCode.length != 6) {
       throw Exception('Mã mời phải có 6 ký tự');
     }
@@ -109,7 +101,7 @@ class PartnershipService {
     try {
       debugPrint('🤝 Đang xử lý mã mời: $inviteCode');
 
-      // Find invite code in separate collection
+      // Find invite code
       final codeSnapshot = await _dbRef
           .child('inviteCodes')
           .child(inviteCode.toUpperCase())
@@ -126,7 +118,7 @@ class PartnershipService {
 
       final inviterUid = codeData['userId'] as String;
 
-      // Get inviter's current data
+      // Get inviter's data
       final inviterSnapshot = await _dbRef
           .child('users')
           .child(inviterUid)
@@ -158,7 +150,7 @@ class PartnershipService {
         isActive: true,
       );
 
-      // Double-check users don't have partners before proceeding
+      // Double-check before proceeding
       final inviterCheck = await _dbRef.child('users/$inviterUid').get();
       final currentUserCheck = await _dbRef
           .child('users/${userProvider.currentUser!.uid}')
@@ -177,7 +169,8 @@ class PartnershipService {
         throw Exception('Bạn đã có đối tác');
       }
 
-      // ✅ FIX: Execute partnership creation with immediate notifications
+      // ✅ STEP 1: Execute partnership creation
+      debugPrint('🔧 Executing partnership creation...');
       await _executePartnershipCreation(
         partnership,
         inviterUid,
@@ -186,16 +179,25 @@ class PartnershipService {
         inviterData,
       );
 
-      debugPrint('✅ Partnership created and both users notified');
+      // ✅ STEP 2: Force refresh UserProvider and WAIT for completion
+      debugPrint('🔄 Force refreshing UserProvider...');
+      await _forceRefreshUserProviderAndWait(userProvider, partnershipId);
+
+      // ✅ STEP 3: Force sync DataService
+      debugPrint('🔄 Force syncing DataService...');
+      await _forceSyncDataService();
+
+      // ✅ STEP 4: Final UI update trigger
+      debugPrint('📢 Triggering final UI updates...');
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      debugPrint('✅ Partnership acceptance completed successfully');
     } catch (e) {
       debugPrint('❌ Lỗi khi chấp nhận mời: $e');
       rethrow;
     }
   }
 
-  // lib/data/services/partnership_service.dart
-
-  // ✅ ENHANCED: _executePartnershipCreation with explicit inviter notification
   Future<void> _executePartnershipCreation(
     Partnership partnership,
     String inviterUid,
@@ -213,20 +215,24 @@ class PartnershipService {
     debugPrint('   Accepter: $currentUid');
 
     try {
-      // ✅ STEP 1: Create partnership record
+      // ✅ STEP 1: Create partnership record with CORRECT structure
       await _dbRef.child('partnerships').child(partnershipId).set({
         'id': partnershipId,
-        'memberIds': {for (var id in partnership.memberIds) id: true},
+        // ✅ FIX: Use memberIds (not members)
+        'memberIds': {inviterUid: true, currentUid: true},
         'createdAt': partnershipTimestamp,
-        'memberNames': partnership.memberNames,
+        'memberNames': {
+          inviterUid: partnership.memberNames[inviterUid],
+          currentUid: partnership.memberNames[currentUid],
+        },
         'isActive': true,
         'lastSyncTime': timestamp,
       });
       debugPrint('✅ Partnership record created');
 
-      // ✅ STEP 2: Update both users WITH EXPLICIT TRIGGERS
+      // ✅ STEP 2: Update both users
       final userUpdates = <String, dynamic>{
-        // ========== INVITER UPDATES ==========
+        // Inviter updates
         'users/$inviterUid/partnershipId': partnershipId,
         'users/$inviterUid/partnerUid': currentUid,
         'users/$inviterUid/partnerDisplayName':
@@ -236,8 +242,9 @@ class PartnershipService {
         'users/$inviterUid/currentInviteCode': null,
         'users/$inviterUid/inviteCodeExpiry': null,
         'users/$inviterUid/updatedAt': timestamp,
-        'users/$inviterUid/lastPartnerUpdate': timestamp, // ← TRIGGER
-        // ========== ACCEPTER UPDATES ==========
+        'users/$inviterUid/lastPartnerUpdate': timestamp,
+
+        // Accepter updates
         'users/$currentUid/partnershipId': partnershipId,
         'users/$currentUid/partnerUid': inviterUid,
         'users/$currentUid/partnerDisplayName':
@@ -246,7 +253,8 @@ class PartnershipService {
             ?.toString(),
         'users/$currentUid/partnershipCreatedAt': partnershipTimestamp,
         'users/$currentUid/updatedAt': timestamp,
-        'users/$currentUid/lastPartnerUpdate': timestamp, // ← TRIGGER
+        'users/$currentUid/lastPartnerUpdate': timestamp,
+
         // Remove invite code
         'inviteCodes/$inviteCode': null,
       };
@@ -254,38 +262,46 @@ class PartnershipService {
       await _dbRef.update(userUpdates);
       debugPrint('✅ Both users updated in Firebase');
 
-      // ✅ STEP 3: Send HIGH-PRIORITY refresh triggers to BOTH users
-      await _sendRefreshTriggersToUsers(inviterUid, currentUid, partnershipId);
+      // ✅ VERIFY: Check if updates were successful
+      final verifyInviter = await _dbRef
+          .child('users/$inviterUid/partnershipId')
+          .get();
+      final verifyAccepter = await _dbRef
+          .child('users/$currentUid/partnershipId')
+          .get();
 
-      // ✅ STEP 4: Send notifications
+      debugPrint('🔍 Verification:');
+      debugPrint('   Inviter partnershipId: ${verifyInviter.value}');
+      debugPrint('   Accepter partnershipId: ${verifyAccepter.value}');
+
+      // Continue with notifications...
+      await _sendRefreshTriggersToUsers(inviterUid, currentUid, partnershipId);
       await _sendPartnershipNotifications(
         inviterUid,
         currentUid,
         userProvider.currentUser!.displayName ?? 'Người dùng',
         inviterData['displayName']?.toString() ?? 'Người dùng',
       );
-
-      // ✅ STEP 5: Trigger global partnership update event
       await _triggerGlobalPartnershipUpdate(partnershipId, [
         inviterUid,
         currentUid,
       ]);
 
       debugPrint('✅ Partnership creation completed successfully');
-    } catch (e) {
+    } catch (e, stackTrace) {
       debugPrint('❌ Error in partnership creation: $e');
+      debugPrint('Stack trace: $stackTrace');
       rethrow;
     }
   }
 
-  // ✅ NEW: Send refresh triggers to both users
   Future<void> _sendRefreshTriggersToUsers(
     String inviterUid,
     String currentUid,
     String partnershipId,
   ) async {
     try {
-      debugPrint('📤 Sending refresh triggers to both users...');
+      debugPrint('📤 Sending HIGH PRIORITY refresh triggers to both users...');
 
       final refreshData = {
         'type': 'partnership_created',
@@ -293,6 +309,7 @@ class PartnershipService {
         'timestamp': ServerValue.timestamp,
         'requireRefresh': true,
         'priority': 'high',
+        'forceReload': true,
       };
 
       // Send to both users simultaneously
@@ -309,13 +326,13 @@ class PartnershipService {
             .set(refreshData),
       ]);
 
-      debugPrint('✅ Refresh triggers sent to both users');
+      debugPrint('✅ HIGH-PRIORITY refresh triggers sent to both users');
     } catch (e) {
       debugPrint('❌ Error sending refresh triggers: $e');
     }
   }
 
-  // ✅ NEW: Trigger global partnership update
+  /// ✅ NEW: Trigger global partnership update
   Future<void> _triggerGlobalPartnershipUpdate(
     String partnershipId,
     List<String> affectedUsers,
@@ -337,7 +354,7 @@ class PartnershipService {
     }
   }
 
-  // ✅ ENHANCED: Send notifications with action data
+  /// ✅ ENHANCED: Send notifications with action data
   Future<void> _sendPartnershipNotifications(
     String inviterUid,
     String currentUid,
@@ -347,7 +364,7 @@ class PartnershipService {
     try {
       final timestamp = ServerValue.timestamp;
 
-      // ✅ CRITICAL: High-priority notification for INVITER
+      // ✅ High-priority notification for INVITER
       await _dbRef.child('user_notifications').child(inviterUid).push().set({
         'title': 'Kết nối thành công! 🎉',
         'body': '$currentUserName đã chấp nhận lời mời kết nối của bạn.',
@@ -355,7 +372,7 @@ class PartnershipService {
         'timestamp': timestamp,
         'isRead': false,
         'priority': 'high',
-        'requiresAction': true, // ← Force UI update
+        'requiresAction': true,
         'actionData': {
           'partnerUid': currentUid,
           'partnerName': currentUserName,
@@ -385,34 +402,41 @@ class PartnershipService {
     }
   }
 
-  // ✅ NEW: Force refresh UserProvider and WAIT for completion
+  /// ✅ NEW: Force refresh UserProvider and WAIT for completion
   Future<void> _forceRefreshUserProviderAndWait(
     UserProvider userProvider,
     String expectedPartnershipId,
   ) async {
     debugPrint('🔄 Force refreshing UserProvider and waiting...');
 
-    // Trigger refresh
+    // Trigger first refresh
     await userProvider.refreshUser();
 
     // Wait up to 5 seconds for partnership to be set
     final stopwatch = Stopwatch()..start();
+    int refreshCount = 0;
+
     while (userProvider.partnershipId != expectedPartnershipId &&
         stopwatch.elapsed.inSeconds < 5) {
       await Future.delayed(const Duration(milliseconds: 100));
-      await userProvider.refreshUser(); // Keep trying
+      await userProvider.refreshUser();
+      refreshCount++;
     }
 
     if (userProvider.partnershipId == expectedPartnershipId) {
-      debugPrint('✅ UserProvider updated with partnership');
+      debugPrint(
+        '✅ UserProvider updated with partnership after $refreshCount attempts',
+      );
     } else {
-      debugPrint('⚠️ UserProvider update timeout - but continuing');
+      debugPrint(
+        '⚠️ UserProvider update timeout after $refreshCount attempts - but continuing',
+      );
     }
   }
 
-  // ✅ NEW: Force sync DataService AND all providers
-  Future<void> _forceSyncDataServiceWithProviders() async {
-    debugPrint('🔄 Force syncing DataService and providers...');
+  /// ✅ NEW: Force sync DataService
+  Future<void> _forceSyncDataService() async {
+    debugPrint('🔄 Force syncing DataService...');
 
     if (!_dataService.isInitialized || !_dataService.isOnline) {
       debugPrint('⚠️ DataService not ready for sync');
@@ -420,10 +444,9 @@ class PartnershipService {
     }
 
     try {
-      // ✅ WAIT for sync to complete (no unawaited)
       await _dataService.forceSyncNow();
 
-      // ✅ Additional delay to ensure Firebase propagation
+      // Wait for Firebase propagation
       await Future.delayed(const Duration(milliseconds: 500));
 
       debugPrint('✅ DataService sync completed');
@@ -432,37 +455,7 @@ class PartnershipService {
     }
   }
 
-  /// ✅ NEW: Force refresh UserProviders for both users
-  Future<void> _forceRefreshUserProviders(
-    String inviterUid,
-    String currentUid,
-  ) async {
-    try {
-      // Send refresh trigger to both users
-      final refreshData = {
-        'type': 'partnership_update',
-        'timestamp': ServerValue.timestamp,
-        'requireRefresh': true,
-      };
-
-      await Future.wait([
-        _dbRef
-            .child('user_refresh_triggers')
-            .child(inviterUid)
-            .push()
-            .set(refreshData),
-        _dbRef
-            .child('user_refresh_triggers')
-            .child(currentUid)
-            .push()
-            .set(refreshData),
-      ]);
-
-      debugPrint('✅ Refresh triggers sent to both users');
-    } catch (e) {
-      debugPrint('❌ Error sending refresh triggers: $e');
-    }
-  }
+  // ============ DISCONNECT PARTNERSHIP ============
 
   Future<void> disconnectPartnership(UserProvider userProvider) async {
     if (userProvider.currentUser == null) {
@@ -480,9 +473,7 @@ class PartnershipService {
       final partnerUid = userProvider.partnerUid!;
       final currentUid = userProvider.currentUser!.uid;
 
-      // Use batch updates for atomic operations
       final updates = <String, dynamic>{
-        // Send notification to partner before disconnecting
         'user_notifications/$partnerUid/${_dbRef.push().key}': {
           'title': 'Kết nối đã bị ngắt',
           'body':
@@ -491,30 +482,23 @@ class PartnershipService {
           'type': 'partnership_disconnected',
           'isRead': false,
         },
-
-        // Clear partnership data from both users
         'users/$currentUid/partnershipId': null,
         'users/$currentUid/partnerUid': null,
         'users/$currentUid/partnerDisplayName': null,
         'users/$currentUid/partnershipCreatedAt': null,
         'users/$currentUid/updatedAt': ServerValue.timestamp,
-
         'users/$partnerUid/partnershipId': null,
         'users/$partnerUid/partnerUid': null,
         'users/$partnerUid/partnerDisplayName': null,
         'users/$partnerUid/partnershipCreatedAt': null,
         'users/$partnerUid/updatedAt': ServerValue.timestamp,
-
-        // Mark partnership as inactive instead of deleting
         'partnerships/$partnershipId/isActive': false,
         'partnerships/$partnershipId/disconnectedAt': ServerValue.timestamp,
         'partnerships/$partnershipId/disconnectedBy': currentUid,
       };
 
-      // Execute batch update
       await _dbRef.update(updates);
 
-      // Trigger DataService sync
       if (_dataService.isInitialized && _dataService.isOnline) {
         unawaited(_dataService.forceSyncNow());
       }
@@ -526,74 +510,63 @@ class PartnershipService {
     }
   }
 
-  // ============ INVITE CODE VALIDATION ============
+  // ============ VALIDATION METHODS ============
 
-  /// Validate invite code data
   Future<void> _validateInviteCode(
     Map<dynamic, dynamic> codeData,
     UserProvider userProvider,
   ) async {
-    // Check if invite code is active
     if (codeData['isActive'] != true) {
       throw Exception('Mã mời không còn hoạt động');
     }
 
-    // Check if inviter is current user
     final inviterUid = codeData['userId'] as String;
     if (inviterUid == userProvider.currentUser!.uid) {
       throw Exception('Bạn không thể kết nối với chính mình');
     }
 
-    // Check invite code expiry
     final expiry = codeData['expiryTime'] as int?;
     if (expiry != null && DateTime.now().millisecondsSinceEpoch > expiry) {
-      // Auto-clear expired invite code
       final inviteCode = codeData.keys.first;
       unawaited(_clearExpiredInviteCode(inviteCode.toString()));
       throw Exception('Mã mời đã hết hạn');
     }
   }
 
-  /// Validate invitation before accepting
   Future<void> _validateInvitation(
     String inviterUid,
     Map<dynamic, dynamic> inviterData,
     UserProvider userProvider,
   ) async {
-    // Check if inviter already has partner
     if (inviterData['partnershipId'] != null) {
       throw Exception('Người tạo mã mời đã có đối tác');
     }
 
-    // Additional validation - check if inviter account is valid
     final displayName = inviterData['displayName']?.toString();
     if (displayName == null || displayName.trim().isEmpty) {
       throw Exception('Tài khoản người mời không hợp lệ');
     }
 
-    // Check if both users have valid email
     final inviterEmail = inviterData['email']?.toString();
     if (inviterEmail == null || inviterEmail.trim().isEmpty) {
       throw Exception('Tài khoản người mời chưa xác minh email');
     }
   }
 
-  /// Clear user's invite code
+  // ============ UTILITY METHODS ============
+
   Future<void> _clearUserInviteCode(String userId) async {
     try {
-      // Get user's current invite code
       final userSnapshot = await _dbRef.child('users').child(userId).get();
       if (userSnapshot.exists) {
         final userData = userSnapshot.value as Map<dynamic, dynamic>;
         final currentCode = userData['currentInviteCode'] as String?;
 
         if (currentCode != null) {
-          // Remove from inviteCodes collection
           await _dbRef.child('inviteCodes').child(currentCode).remove();
         }
       }
 
-      // Clear from user profile
       await _dbRef.child('users').child(userId).update({
         'currentInviteCode': null,
         'inviteCodeExpiry': null,
@@ -606,10 +579,8 @@ class PartnershipService {
     }
   }
 
-  /// Clear expired invite code
   Future<void> _clearExpiredInviteCode(String inviteCode) async {
     try {
-      // Get invite code data to find user
       final codeSnapshot = await _dbRef
           .child('inviteCodes')
           .child(inviteCode)
@@ -619,7 +590,6 @@ class PartnershipService {
         final userId = codeData['userId'] as String?;
 
         if (userId != null) {
-          // Clear from user profile
           await _dbRef.child('users').child(userId).update({
             'currentInviteCode': null,
             'inviteCodeExpiry': null,
@@ -628,18 +598,13 @@ class PartnershipService {
         }
       }
 
-      // Remove from inviteCodes collection
       await _dbRef.child('inviteCodes').child(inviteCode).remove();
-
       debugPrint('🧹 Đã xóa mã mời hết hạn: $inviteCode');
     } catch (e) {
       debugPrint('⚠️ Lỗi khi xóa mã mời hết hạn: $e');
     }
   }
 
-  // ============ UTILITY METHODS ============
-
-  /// Generate random 6-character code
   String _generateRandomCode() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final random = Random();
@@ -651,74 +616,41 @@ class PartnershipService {
     );
   }
 
-  /// Check if invite code is unique
   Future<bool> _checkInviteCodeUniqueness(String code) async {
     try {
-      debugPrint('🔍 Kiểm tra mã: $code');
-
       final snapshot = await _dbRef
           .child('inviteCodes')
           .child(code.toUpperCase())
           .get();
 
       if (!snapshot.exists) {
-        debugPrint('✅ Mã $code có thể sử dụng');
-        return true; // Unique - can use
+        return true;
       }
 
-      // Check if existing code is expired
       final codeData = snapshot.value as Map<dynamic, dynamic>;
       final expiry = codeData['expiryTime'] as int?;
 
       if (expiry != null && DateTime.now().millisecondsSinceEpoch > expiry) {
-        // Clear expired code and return true
         await _clearExpiredInviteCode(code);
-        debugPrint('✅ Mã $code đã hết hạn, có thể tái sử dụng');
         return true;
       }
 
-      debugPrint('❌ Mã $code đã tồn tại và còn hiệu lực');
-      return false; // Not unique
+      return false;
     } catch (e) {
       debugPrint('❌ Lỗi khi kiểm tra unique: $e');
       throw Exception('Không thể kiểm tra tính duy nhất của mã: $e');
     }
   }
 
-  /// Send partnership notification
-  Future<void> _sendPartnershipNotification(
-    String recipientUid,
-    String title,
-    String body,
-    String type,
-  ) async {
-    try {
-      await _dbRef.child('user_notifications').child(recipientUid).push().set({
-        'title': title,
-        'body': body,
-        'timestamp': ServerValue.timestamp,
-        'type': type,
-        'isRead': false,
-      });
-      debugPrint('📬 Đã gửi thông báo partnership đến: $recipientUid');
-    } catch (e) {
-      debugPrint('❌ Lỗi khi gửi thông báo partnership: $e');
-    }
-  }
+  // ============ PUBLIC UTILITY METHODS ============
 
-  // ============ INVITE CODE MANAGEMENT METHODS ============
-
-  /// Cancel invite code
   Future<void> cancelInviteCode(UserProvider userProvider) async {
     if (userProvider.currentUser == null) {
       throw Exception('Người dùng chưa đăng nhập');
     }
 
     try {
-      debugPrint('🚫 Đang hủy mã mời...');
-
       await _clearUserInviteCode(userProvider.currentUser!.uid);
-
       debugPrint('✅ Đã hủy mã mời');
     } catch (e) {
       debugPrint('❌ Lỗi khi hủy mã mời: $e');
@@ -726,11 +658,8 @@ class PartnershipService {
     }
   }
 
-  /// Get active invite code with validation
   Future<String?> getActiveInviteCode(UserProvider userProvider) async {
-    if (userProvider.currentUser == null) {
-      return null;
-    }
+    if (userProvider.currentUser == null) return null;
 
     try {
       final snapshot = await _dbRef
@@ -738,32 +667,24 @@ class PartnershipService {
           .child(userProvider.currentUser!.uid)
           .get();
 
-      if (!snapshot.exists) {
-        return null;
-      }
+      if (!snapshot.exists) return null;
 
       final userData = snapshot.value as Map<dynamic, dynamic>;
       final inviteCode = userData['currentInviteCode'] as String?;
       final expiry = userData['inviteCodeExpiry'] as int?;
 
-      if (inviteCode == null) {
-        return null;
-      }
+      if (inviteCode == null) return null;
 
-      // Check if expired
       if (expiry != null && DateTime.now().millisecondsSinceEpoch > expiry) {
-        // Auto-clear expired code
         await cancelInviteCode(userProvider);
         return null;
       }
 
-      // Double-check in inviteCodes collection
       final codeSnapshot = await _dbRef
           .child('inviteCodes')
           .child(inviteCode)
           .get();
       if (!codeSnapshot.exists) {
-        // Code doesn't exist in collection, clear from user
         await _clearUserInviteCode(userProvider.currentUser!.uid);
         return null;
       }
@@ -775,7 +696,6 @@ class PartnershipService {
     }
   }
 
-  /// Check if invite code is valid (for UI validation)
   Future<Map<String, dynamic>> validateInviteCode(String inviteCode) async {
     if (inviteCode.length != 6) {
       return {'valid': false, 'reason': 'Mã mời phải có 6 ký tự'};
@@ -793,18 +713,15 @@ class PartnershipService {
 
       final codeData = codeSnapshot.value as Map<dynamic, dynamic>;
 
-      // Check if active
       if (codeData['isActive'] != true) {
         return {'valid': false, 'reason': 'Mã mời không còn hoạt động'};
       }
 
-      // Check expiry
       final expiry = codeData['expiryTime'] as int?;
       if (expiry != null && DateTime.now().millisecondsSinceEpoch > expiry) {
         return {'valid': false, 'reason': 'Mã mời đã hết hạn'};
       }
 
-      // Check if inviter still exists and doesn't have partner
       final inviterUid = codeData['userId'] as String;
       final inviterSnapshot = await _dbRef
           .child('users')
@@ -830,110 +747,42 @@ class PartnershipService {
     }
   }
 
-  // ============ PARTNERSHIP INFORMATION METHODS ============
-
-  /// Get partnership details
   Future<Partnership?> getPartnershipDetails(String partnershipId) async {
     try {
-      debugPrint('📋 Đang lấy thông tin partnership: $partnershipId');
-
       final snapshot = await _dbRef
           .child('partnerships')
           .child(partnershipId)
           .get();
 
-      if (!snapshot.exists) {
-        debugPrint('⚠️ Không tìm thấy partnership: $partnershipId');
-        return null;
-      }
+      if (!snapshot.exists) return null;
 
-      final partnership = Partnership.fromSnapshot(snapshot);
-      debugPrint('✅ Đã lấy thông tin partnership');
-      return partnership;
+      return Partnership.fromSnapshot(snapshot);
     } catch (e) {
       debugPrint('❌ Lỗi khi lấy thông tin partnership: $e');
       return null;
     }
   }
 
-  /// Get partner profile
   Future<AppUser?> getPartnerProfile(String partnerUid) async {
     try {
-      debugPrint('👤 Đang lấy thông tin đối tác: $partnerUid');
-
       final snapshot = await _dbRef.child('users').child(partnerUid).get();
 
-      if (!snapshot.exists) {
-        debugPrint('⚠️ Không tìm thấy thông tin đối tác: $partnerUid');
-        return null;
-      }
+      if (!snapshot.exists) return null;
 
       final userData = snapshot.value as Map<dynamic, dynamic>;
-      final partner = AppUser.fromMap(userData, partnerUid);
-
-      debugPrint('✅ Đã lấy thông tin đối tác');
-      return partner;
+      return AppUser.fromMap(userData, partnerUid);
     } catch (e) {
       debugPrint('❌ Lỗi khi lấy thông tin đối tác: $e');
       return null;
     }
   }
 
-  /// Validate partnership status
-  Future<bool> validatePartnershipStatus(UserProvider userProvider) async {
-    if (!userProvider.hasPartner) {
-      return true; // No partnership to validate
-    }
-
-    try {
-      debugPrint('🔍 Đang kiểm tra trạng thái partnership...');
-
-      final partnershipId = userProvider.partnershipId!;
-      final partnership = await getPartnershipDetails(partnershipId);
-
-      if (partnership == null) {
-        debugPrint('⚠️ Partnership không tồn tại, xóa dữ liệu local');
-        await _clearLocalPartnershipData(userProvider);
-        return false;
-      }
-
-      if (!partnership.isActive) {
-        debugPrint('⚠️ Partnership không hoạt động, xóa dữ liệu local');
-        await _clearLocalPartnershipData(userProvider);
-        return false;
-      }
-
-      if (!partnership.memberIds.contains(userProvider.currentUser!.uid)) {
-        debugPrint('⚠️ User không trong partnership, xóa dữ liệu local');
-        await _clearLocalPartnershipData(userProvider);
-        return false;
-      }
-
-      debugPrint('✅ Trạng thái partnership hợp lệ');
-      return true;
-    } catch (e) {
-      debugPrint('❌ Lỗi khi kiểm tra partnership: $e');
-      return false;
-    }
+  void unawaited(Future<void> future) {
+    future.catchError((error) {
+      debugPrint('Unawaited partnership service error: $error');
+    });
   }
 
-  /// Clear local partnership data when invalid
-  Future<void> _clearLocalPartnershipData(UserProvider userProvider) async {
-    try {
-      await _dbRef.child('users').child(userProvider.currentUser!.uid).update({
-        'partnershipId': null,
-        'partnerUid': null,
-        'partnerDisplayName': null,
-        'partnershipCreatedAt': null,
-        'updatedAt': ServerValue.timestamp,
-      });
-      debugPrint('🧹 Đã xóa dữ liệu partnership local');
-    } catch (e) {
-      debugPrint('❌ Lỗi khi xóa dữ liệu partnership: $e');
-    }
-  }
-
-  /// Get partnership statistics
   Future<Map<String, dynamic>> getPartnershipStatistics(
     UserProvider userProvider,
   ) async {
@@ -984,270 +833,46 @@ class PartnershipService {
     }
   }
 
-  /// Stream partnership updates
-  Stream<Partnership?> streamPartnershipUpdates(String partnershipId) {
-    return _dbRef.child('partnerships').child(partnershipId).onValue.map((
-      event,
-    ) {
-      if (!event.snapshot.exists) {
+  /// ✅ NEW: Check if partnership already exists between two users
+  Future<String?> _findExistingPartnership(String uid1, String uid2) async {
+    try {
+      debugPrint(
+        '🔍 Checking for existing partnership between $uid1 and $uid2',
+      );
+
+      final partnershipsSnapshot = await _dbRef.child('partnerships').get();
+
+      if (!partnershipsSnapshot.exists) {
+        debugPrint('   No partnerships found');
         return null;
       }
-      try {
-        return Partnership.fromSnapshot(event.snapshot);
-      } catch (e) {
-        debugPrint('❌ Lỗi khi parse partnership data: $e');
-        return null;
-      }
-    });
-  }
 
-  // ============ CLEANUP METHODS ============
+      final partnershipsData =
+          partnershipsSnapshot.value as Map<dynamic, dynamic>;
 
-  /// Clean up expired invite codes (can be called periodically)
-  Future<void> cleanupExpiredInviteCodes() async {
-    try {
-      debugPrint('🧹 Đang dọn dẹp mã mời hết hạn...');
+      for (final entry in partnershipsData.entries) {
+        final partnershipId = entry.key as String;
+        final data = entry.value as Map<dynamic, dynamic>;
 
-      final cutoffTime = DateTime.now().millisecondsSinceEpoch;
-
-      // Get all invite codes (Firebase doesn't support orderByChild on nested data easily)
-      final snapshot = await _dbRef.child('inviteCodes').get();
-
-      if (snapshot.exists) {
-        final inviteCodes = snapshot.value as Map<dynamic, dynamic>;
-        final updates = <String, dynamic>{};
-        int expiredCount = 0;
-
-        for (final entry in inviteCodes.entries) {
-          final code = entry.key as String;
-          final codeData = entry.value as Map<dynamic, dynamic>;
-          final expiry = codeData['expiryTime'] as int?;
-          final userId = codeData['userId'] as String?;
-
-          if (expiry != null && expiry <= cutoffTime) {
-            // Mark invite code for removal
-            updates['inviteCodes/$code'] = null;
-
-            // Clear from user profile if exists
-            if (userId != null) {
-              updates['users/$userId/currentInviteCode'] = null;
-              updates['users/$userId/inviteCodeExpiry'] = null;
-              updates['users/$userId/updatedAt'] = ServerValue.timestamp;
-            }
-
-            expiredCount++;
-          }
-        }
-
-        if (updates.isNotEmpty) {
-          await _dbRef.update(updates);
-          debugPrint('✅ Đã dọn dẹp $expiredCount mã mời hết hạn');
-        } else {
-          debugPrint('ℹ️ Không có mã mời hết hạn nào cần dọn dẹp');
-        }
-      }
-    } catch (e) {
-      debugPrint('❌ Lỗi khi dọn dẹp mã mời hết hạn: $e');
-    }
-  }
-
-  /// Clean up inactive partnerships (optional maintenance)
-  Future<void> cleanupInactivePartnerships() async {
-    try {
-      debugPrint('🧹 Đang dọn dẹp partnerships không hoạt động...');
-
-      final snapshot = await _dbRef.child('partnerships').get();
-
-      if (snapshot.exists) {
-        final partnerships = snapshot.value as Map<dynamic, dynamic>;
-        final updates = <String, dynamic>{};
-        int cleanedCount = 0;
-
-        for (final entry in partnerships.entries) {
-          final partnershipId = entry.key as String;
-          final partnershipData = entry.value as Map<dynamic, dynamic>;
-
-          final isActive = partnershipData['isActive'] as bool? ?? true;
-          final disconnectedAt = partnershipData['disconnectedAt'] as int?;
-
-          // Clean up partnerships that have been inactive for more than 30 days
-          if (!isActive && disconnectedAt != null) {
-            final disconnectedTime = DateTime.fromMillisecondsSinceEpoch(
-              disconnectedAt,
-            );
-            final daysSinceDisconnection = DateTime.now()
-                .difference(disconnectedTime)
-                .inDays;
-
-            if (daysSinceDisconnection > 30) {
-              // Archive instead of delete for data integrity
-              updates['archived_partnerships/$partnershipId'] = partnershipData;
-              updates['partnerships/$partnershipId'] = null;
-              cleanedCount++;
-            }
-          }
-        }
-
-        if (updates.isNotEmpty) {
-          await _dbRef.update(updates);
-          debugPrint('✅ Đã archive $cleanedCount partnerships cũ');
-        } else {
-          debugPrint('ℹ️ Không có partnerships nào cần dọn dẹp');
-        }
-      }
-    } catch (e) {
-      debugPrint('❌ Lỗi khi dọn dẹp partnerships: $e');
-    }
-  }
-
-  /// Get invite code statistics (for admin/debug purposes)
-  Future<Map<String, dynamic>> getInviteCodeStatistics() async {
-    try {
-      final snapshot = await _dbRef.child('inviteCodes').get();
-
-      if (!snapshot.exists) {
-        return {'totalActiveCodes': 0, 'expiredCodes': 0, 'validCodes': 0};
-      }
-
-      final inviteCodes = snapshot.value as Map<dynamic, dynamic>;
-      int totalCodes = inviteCodes.length;
-      int expiredCodes = 0;
-      int validCodes = 0;
-
-      final now = DateTime.now().millisecondsSinceEpoch;
-
-      for (final codeData in inviteCodes.values) {
-        final data = codeData as Map<dynamic, dynamic>;
-        final expiry = data['expiryTime'] as int?;
         final isActive = data['isActive'] as bool? ?? true;
+        if (!isActive) continue;
 
-        if (!isActive || (expiry != null && expiry <= now)) {
-          expiredCodes++;
-        } else {
-          validCodes++;
+        final memberIds = data['memberIds'] as Map<dynamic, dynamic>?;
+        if (memberIds == null) continue;
+
+        final members = memberIds.keys.toList();
+
+        if (members.contains(uid1) && members.contains(uid2)) {
+          debugPrint('   ✅ Found existing partnership: $partnershipId');
+          return partnershipId;
         }
       }
 
-      return {
-        'totalActiveCodes': totalCodes,
-        'expiredCodes': expiredCodes,
-        'validCodes': validCodes,
-        'lastChecked': DateTime.now().toIso8601String(),
-      };
+      debugPrint('   ℹ️ No existing partnership found');
+      return null;
     } catch (e) {
-      debugPrint('❌ Lỗi khi lấy thống kê invite codes: $e');
-      return {};
+      debugPrint('❌ Error checking existing partnership: $e');
+      return null;
     }
-  }
-
-  /// Force sync all partnership data
-  Future<void> forceSyncPartnershipData(UserProvider userProvider) async {
-    if (userProvider.currentUser == null) {
-      return;
-    }
-
-    try {
-      debugPrint('🔄 Force sync partnership data...');
-
-      // Validate current partnership status
-      if (userProvider.hasPartner) {
-        await validatePartnershipStatus(userProvider);
-      }
-
-      // Trigger DataService sync if available
-      if (_dataService.isInitialized && _dataService.isOnline) {
-        await _dataService.forceSyncNow();
-      }
-
-      debugPrint('✅ Partnership data sync completed');
-    } catch (e) {
-      debugPrint('❌ Lỗi khi sync partnership data: $e');
-    }
-  }
-
-  /// Get all user's partnership history
-  Future<List<Map<String, dynamic>>> getPartnershipHistory(
-    UserProvider userProvider,
-  ) async {
-    if (userProvider.currentUser == null) {
-      return [];
-    }
-
-    try {
-      debugPrint('📜 Đang lấy lịch sử partnerships...');
-
-      final userId = userProvider.currentUser!.uid;
-      final history = <Map<String, dynamic>>[];
-
-      // Get active partnerships
-      final activeSnapshot = await _dbRef
-          .child('partnerships')
-          .orderByChild('memberIds')
-          .get();
-
-      if (activeSnapshot.exists) {
-        final partnerships = activeSnapshot.value as Map<dynamic, dynamic>;
-
-        for (final entry in partnerships.entries) {
-          final partnershipData = entry.value as Map<dynamic, dynamic>;
-          final memberIds = List<String>.from(
-            partnershipData['memberIds'] ?? [],
-          );
-
-          if (memberIds.contains(userId)) {
-            history.add({
-              'id': entry.key,
-              'type': 'active',
-              'data': partnershipData,
-            });
-          }
-        }
-      }
-
-      // Get archived partnerships
-      final archivedSnapshot = await _dbRef
-          .child('archived_partnerships')
-          .get();
-
-      if (archivedSnapshot.exists) {
-        final archivedPartnerships =
-            archivedSnapshot.value as Map<dynamic, dynamic>;
-
-        for (final entry in archivedPartnerships.entries) {
-          final partnershipData = entry.value as Map<dynamic, dynamic>;
-          final memberIds = List<String>.from(
-            partnershipData['memberIds'] ?? [],
-          );
-
-          if (memberIds.contains(userId)) {
-            history.add({
-              'id': entry.key,
-              'type': 'archived',
-              'data': partnershipData,
-            });
-          }
-        }
-      }
-
-      // Sort by creation date (newest first)
-      history.sort((a, b) {
-        final aCreated = a['data']['createdAt'] as int? ?? 0;
-        final bCreated = b['data']['createdAt'] as int? ?? 0;
-        return bCreated.compareTo(aCreated);
-      });
-
-      debugPrint('✅ Đã lấy ${history.length} partnerships từ lịch sử');
-      return history;
-    } catch (e) {
-      debugPrint('❌ Lỗi khi lấy lịch sử partnerships: $e');
-      return [];
-    }
-  }
-
-  // Utility method for unawaited futures
-  void unawaited(Future<void> future) {
-    future.catchError((error) {
-      debugPrint('Unawaited partnership service error: $error');
-    });
   }
 }
